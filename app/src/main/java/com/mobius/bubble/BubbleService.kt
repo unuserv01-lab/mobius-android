@@ -20,6 +20,7 @@ import android.view.Gravity
 import android.view.ViewConfiguration
 import android.view.WindowManager
 import android.widget.FrameLayout
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.ComposeView
 import androidx.core.app.NotificationCompat
@@ -44,8 +45,13 @@ import com.mobius.core.ChatMessage
 import com.mobius.core.FeatureFlag
 import com.mobius.core.TaskHooks
 import com.mobius.core.TaskOutcome
+import com.mobius.ui.AppLanguage
+import com.mobius.ui.LanguageManager
+import com.mobius.ui.LocalStrings
 import com.mobius.ui.MainActivity
 import com.mobius.ui.MobiusTheme
+import com.mobius.ui.stringsFor
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -93,6 +99,11 @@ class BubbleService : Service() {
     private val autoScrollOn = mutableStateOf(true)
     private val chatHistoryOn = mutableStateOf(true)
     private val localFilesOn = mutableStateOf(true)
+    // v7 — language (same DataStore the launcher Activity reads; default ID)
+    // and the unread-reply badge count (local UI state only, never persisted).
+    private val languageManager by lazy { LanguageManager(applicationContext) }
+    private val language = mutableStateOf(AppLanguage.ID)
+    private val unreadCount = mutableStateOf(0)
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -110,6 +121,14 @@ class BubbleService : Service() {
             launch { app.featureFlags.isEnabled(FeatureFlag.LOCAL_FILES).collect { localFilesOn.value = it } }
             launch { app.memoryStore.observeChatMessages().collect { chatMessages.value = it } }
             launch { autoScrollWorker.running.collect { autoScrolling.value = it } }
+            // v7: language follows the Settings picker; re-issue the foreground
+            // notification so its text follows the language too.
+            launch {
+                languageManager.language.collect {
+                    language.value = it
+                    startAsForeground()
+                }
+            }
         }
     }
 
@@ -137,6 +156,7 @@ class BubbleService : Service() {
     // ------------------------------------------------------------------ foreground notification
 
     private fun startAsForeground() {
+        val strings = stringsFor(language.value)
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(
             NotificationChannel(CHANNEL_ID, "${AppConfig.APP_NAME} assistant", NotificationManager.IMPORTANCE_MIN)
@@ -147,10 +167,10 @@ class BubbleService : Service() {
         )
         val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle("${AppConfig.APP_NAME} is ready")
-            .setContentText("Tap the floating bubble to ask for something.")
+            .setContentTitle(strings.notifTitle.format(AppConfig.APP_NAME))
+            .setContentText(strings.notifText)
             .setOngoing(true)
-            .addAction(0, "Stop", stop)
+            .addAction(0, strings.notifStop, stop)
             .build()
         val type = if (Build.VERSION.SDK_INT >= 34) ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE else 0
         ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, type)
@@ -166,14 +186,18 @@ class BubbleService : Service() {
             return
         }
         val root = composeHost {
-            MobiusTheme {
-                BubbleView(
-                    status = chipText.value,
-                    working = working.value,
-                    // v6 (G): visible Stop button while the loop runs.
-                    autoScrolling = autoScrolling.value,
-                    onStopAutoScroll = { autoScrollWorker.stop() },
-                )
+            CompositionLocalProvider(LocalStrings provides stringsFor(language.value)) {
+                MobiusTheme {
+                    BubbleView(
+                        status = chipText.value,
+                        working = working.value,
+                        // v6 (G): visible Stop button while the loop runs.
+                        autoScrolling = autoScrolling.value,
+                        onStopAutoScroll = { autoScrollWorker.stop() },
+                        // v7: unread-reply badge above the chip.
+                        unreadCount = unreadCount.value,
+                    )
+                }
             }
         }
         root.setOnTouchListener(
@@ -201,11 +225,14 @@ class BubbleService : Service() {
 
     private fun openPanel(state: PanelState) {
         panelState.value = state
+        // v7 — the panel is open, so every pending reply is now seen.
+        unreadCount.value = 0
         if (panelRoot != null) return
         // Rebuilt on every open: a detached ComposeView disposes its composition.
         val root = composeHost {
-            MobiusTheme {
-                BubblePanel(
+            CompositionLocalProvider(LocalStrings provides stringsFor(language.value)) {
+                MobiusTheme {
+                    BubblePanel(
                     state = panelState.value,
                     onSubmit = ::onSubmit,
                     onClose = ::onPanelClose,
@@ -225,6 +252,7 @@ class BubbleService : Service() {
                     autoScrolling = autoScrolling.value,
                     onToggleAutoScroll = ::onToggleAutoScroll,
                 )
+                }
             }
         }
         val params = WindowManager.LayoutParams(
@@ -266,7 +294,7 @@ class BubbleService : Service() {
         closePanel()
         chipJob?.cancel()
         working.value = true
-        chipText.value = "Working..."
+        chipText.value = stringsFor(language.value).bubbleWorking
         // v6 (F + G): a new task starts — stop any speech and the scroll loop.
         voiceOutput.stop()
         autoScrollWorker.stop()
@@ -277,10 +305,23 @@ class BubbleService : Service() {
                 app.memoryStore.addChatMessage("user", text)
                 val outcome = app.orchestrator.submit(text, hooks)
                 showOutcome(outcome)
+            } catch (e: CancellationException) {
+                // v7.1 (c): a cancelled run must STILL replace the "Understanding
+                // your request..." status — never leave it stuck. The 30 s cloud
+                // timeout is converted to a normal outcome in CloudAI, so this
+                // is only a last-resort guard (e.g. the service going away
+                // mid-task). Not rethrown on purpose: this job is fire-and-
+                // forget UI work under a SupervisorJob, and showing the
+                // failure outcome matters more than cancellation propagation.
+                // showOutcome clears the status text before opening any panel,
+                // so the status is replaced even if the panel cannot open.
+                val prefix = stringsFor(language.value).bubbleErrorPrefix
+                showOutcome(TaskOutcome(false, prefix + (e.message ?: e.javaClass.simpleName)))
             } catch (e: Exception) {
                 // submit() already converts AI failures into outcomes; this is only a
                 // last-resort guard so a stray exception never kills the bubble service.
-                showOutcome(TaskOutcome(false, "Something went wrong: ${e.message ?: e.javaClass.simpleName}"))
+                val prefix = stringsFor(language.value).bubbleErrorPrefix
+                showOutcome(TaskOutcome(false, prefix + (e.message ?: e.javaClass.simpleName)))
             } finally {
                 working.value = false
             }
@@ -312,10 +353,10 @@ class BubbleService : Service() {
         }
         if (autoScrollWorker.start()) {
             closePanel()
-            chipText.value = "Auto-scroll berjalan — ketuk Stop di bubble untuk berhenti."
+            chipText.value = stringsFor(language.value).bubbleAutoRunning
         } else {
             closePanel()
-            chipText.value = autoScrollWorker.status.value ?: "Auto-scroll tidak bisa dimulai."
+            chipText.value = autoScrollWorker.status.value ?: stringsFor(language.value).bubbleAutoFailed
         }
     }
 
@@ -373,6 +414,10 @@ class BubbleService : Service() {
         }
         val short = outcome.message.length <= 80 && '\n' !in outcome.message
         if (short) {
+            // v7 — the panel is closed, so this reply is unread until the
+            // panel opens (openPanel resets the count). An outcome that
+            // arrives while the panel is already open never increments.
+            if (panelState.value is PanelState.Hidden) unreadCount.value += 1
             chipText.value = outcome.message
             chipJob = serviceScope.launch {
                 delay(5_000)

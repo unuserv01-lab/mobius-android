@@ -3,8 +3,11 @@ package com.mobius.agent
 import com.mobius.ai.PromptBuilder
 import com.mobius.core.AgentType
 import com.mobius.core.AppConfig
+import com.mobius.core.FileExtractor
 import com.mobius.core.MemoryType
 import com.mobius.core.RoutedIntent
+import com.mobius.ui.AppLanguage
+import com.mobius.ui.stringsFor
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -14,6 +17,7 @@ class AgentFactory {
     fun create(type: AgentType, taskId: String, tools: AgentTools): SubAgent = when (type) {
         AgentType.REPLY_WHATSAPP -> ReplyWhatsAppAgent(taskId, tools)
         AgentType.CHAT -> ChatAgent(taskId, tools)
+        AgentType.SUMMARIZE_PAGE -> SummarizePageAgent(taskId, tools)
         // Skills never reach the factory: the Orchestrator runs them via SkillRunner.
         AgentType.SKILL -> throw IllegalArgumentException("Skills run via SkillRunner, not AgentFactory")
     }
@@ -28,6 +32,68 @@ class ChatAgent(taskId: String, tools: AgentTools) : SubAgent(taskId, tools) {
         val heavy = ctx.userText.length > 400
         val answer = tools.ai.generate(taskId, PromptBuilder.chatPrompt(ctx.userText, ctx), heavy)
         return AgentResult(success = true, message = answer.text)
+    }
+}
+
+/**
+ * v7.4 — 3rd agent type: summarize the page currently on screen ("ringkas halaman ini").
+ * 1) Reads the visible screen text of the foreground app through the existing
+ *    readScreen primitive (NO taps, NO typing — read-only, so no screen lock and no
+ *    ActionGate involvement). 2) Truncates to FileExtractor.MAX_CHARS (8000, the same
+ *    convention as attached files). 3) Asks the AI through the SAME fallback chain as
+ *    chat (AIRouter.generate: Nano -> Gemini cloud 30s -> OpenRouter if a key is stored),
+ *    with heavy=true — an 8000-char summary is heavy reasoning, never a Nano job.
+ * 4) Returns the summary as the outcome.
+ *
+ * Honest failure (never an invented summary): no accessibility reader, no foreground
+ * app, or too little readable text (canvas-drawn apps, games, video players) all
+ * return a plain-language failure in the user's language.
+ */
+class SummarizePageAgent(taskId: String, tools: AgentTools) : SubAgent(taskId, tools) {
+    override val name = "SummarizePageTask"
+
+    override suspend fun execute(ctx: TaskContext, intent: RoutedIntent): AgentResult {
+        val s = stringsFor(tools.language)
+        val reader = tools.reader
+            ?: return AgentResult(false, s.sumNoAccess)
+
+        // Foreground app from UsageStats (already excludes MOBIUS itself); fall back to
+        // the active window. Never read our own bubble window: its text is our UI, not
+        // the page the user asked about.
+        val pkg = ctx.foregroundApp ?: reader.currentPackage()
+        if (pkg.isNullOrBlank() || pkg == MOBIUS_PACKAGE) {
+            return AgentResult(false, s.sumNoApp)
+        }
+
+        tools.status(s.sumReading)
+        val texts = reader.readScreen(pkg, READ_LIMIT)
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .distinct() // WebView trees often repeat the same node text
+        val (pageText, _) = FileExtractor.truncateText(texts.joinToString("\n").trim())
+        if (pageText.length < MIN_READABLE_CHARS) {
+            return AgentResult(false, s.sumNoText)
+        }
+
+        tools.status(s.sumSummarizing)
+        val languageName = if (tools.language == AppLanguage.EN) "English" else "Bahasa Indonesia"
+        val answer = tools.ai.generate(
+            taskId,
+            PromptBuilder.summarizePrompt(pageText, languageName, ctx),
+            needsHeavyReasoning = true,
+        )
+        val summary = answer.text.trim()
+        if (summary.isBlank()) return AgentResult(false, s.sumFailed)
+        return AgentResult(success = true, message = summary)
+    }
+
+    private companion object {
+        /** Same node cap as the readScreen primitive's default. */
+        const val READ_LIMIT = 200
+        /** Below this the screen holds only nav labels/buttons — not a summarizable page. */
+        const val MIN_READABLE_CHARS = 50
+        /** Our own package (aapt2: com.mobius) — never summarize our own bubble. */
+        const val MOBIUS_PACKAGE = "com.mobius"
     }
 }
 

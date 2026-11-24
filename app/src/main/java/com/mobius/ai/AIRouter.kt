@@ -1,5 +1,6 @@
 package com.mobius.ai
 
+import com.mobius.core.AppConfig
 import com.mobius.core.MemoryStore
 import com.mobius.core.PermissionManager
 import kotlinx.coroutines.CancellationException
@@ -12,11 +13,18 @@ data class AIResponse(val text: String, val model: String, val reason: String)
 /** Nano's triage verdict (v6 L): light = stay on-device, heavy = goes to cloud. */
 data class NanoTriageVerdict(val light: Boolean, val reason: String)
 
-/** Thrown when a task needs cloud AI but the user has not allowed it. Never calls the cloud. */
-class CloudRequiredException(val reason: String) : Exception(
-    "This task needs cloud AI ($reason), but \"Allow cloud AI\" is OFF. " +
-        "Turn it on in Settings if you want to continue; the request text may then be sent to Gemini cloud."
-)
+/**
+ * Thrown when a task needs cloud AI but the user has not allowed it. Never calls the cloud.
+ * The message is the exact Indonesian outcome text the user sees (bubble + Home) —
+ * it names the toggle to flip and the reason Nano cannot cover for it. [reason] is
+ * kept for the routing log / debugging; it is NOT shown to the user.
+ */
+class CloudRequiredException(val reason: String) : Exception(CLOUD_GATE_MESSAGE) {
+    companion object {
+        const val CLOUD_GATE_MESSAGE =
+            "Butuh cloud AI tapi 'Izinkan AI cloud' masih OFF. Nyalakan di Pengaturan, lalu coba lagi. (Nano tidak tersedia di HP ini.)"
+    }
+}
 
 /**
  * Decides on-device vs cloud for every prompt and LOGS every decision (which model, why).
@@ -32,6 +40,7 @@ class AIRouter(
     private val cloud: CloudAI,
     private val permissions: PermissionManager,
     private val memory: MemoryStore,
+    private val openRouter: OpenRouterAI,
 ) {
     suspend fun generate(
         taskId: String,
@@ -80,8 +89,32 @@ class AIRouter(
         }
 
         // 4) Cloud allowed by the user: call it and log it.
-        val text = cloud.generate(prompt)
-        return record(taskId, MODEL_CLOUD, "$cloudReason -> cloud (allowed by user)", text)
+        // v7.2: on ANY Gemini failure (timeout or error), try the OpenRouter fallback
+        // ONCE — but only when Tuan stored a key. No key = exactly the v7.1 behavior
+        // (the original Gemini exception escapes to the normal outcome path).
+        try {
+            val text = cloud.generate(prompt)
+            return record(taskId, MODEL_CLOUD, "$cloudReason -> cloud (allowed by user)", text)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            val key = permissions.getOpenRouterApiKey()
+            if (key.isBlank()) throw e
+            val model = permissions.getOpenRouterModel()
+                .ifBlank { AppConfig.DEFAULT_OPENROUTER_MODEL }
+            try {
+                val text = openRouter.generate(prompt, key, model)
+                return record(
+                    taskId, MODEL_OPENROUTER,
+                    "Gemini failed (${e.message?.take(80)}) -> OpenRouter $model", text,
+                )
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (oe: Exception) {
+                log(taskId, MODEL_OPENROUTER, "OpenRouter $model failed: ${oe.message?.take(80)}")
+                throw e // original Gemini failure: v7.1 outcome message, unchanged
+            }
+        }
     }
 
     /**
@@ -132,6 +165,7 @@ class AIRouter(
     companion object {
         const val MODEL_ON_DEVICE = "on-device (Gemini Nano)"
         const val MODEL_CLOUD = "cloud (Gemini)"
+        const val MODEL_OPENROUTER = "openrouter"
         const val MODEL_BLOCKED = "blocked"
     }
 }

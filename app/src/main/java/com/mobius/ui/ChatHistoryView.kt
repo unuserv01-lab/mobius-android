@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -30,9 +31,10 @@ import com.mobius.core.ChatMessage
  */
 @Composable
 fun ChatHistoryView(messages: List<ChatMessage>, modifier: Modifier = Modifier) {
+    val strings = LocalStrings.current
     if (messages.isEmpty()) {
         Text(
-            "Belum ada percakapan.",
+            strings.chatEmpty,
             style = MaterialTheme.typography.bodySmall,
             modifier = modifier,
         )
@@ -52,14 +54,14 @@ fun ChatHistoryView(messages: List<ChatMessage>, modifier: Modifier = Modifier) 
         messages.forEach { msg ->
             val isUser = msg.role == "user"
             Surface(
-                shape = MaterialTheme.shapes.small,
+                shape = RoundedCornerShape(12.dp),
                 color = if (isUser) MaterialTheme.colorScheme.primaryContainer
                 else MaterialTheme.colorScheme.surfaceVariant,
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Column(Modifier.padding(8.dp)) {
                     Text(
-                        if (isUser) "Anda" else "MOBIUS",
+                        if (isUser) strings.chatYou else "MOBIUS",
                         style = MaterialTheme.typography.labelSmall,
                     )
                     Text(msg.text, style = MaterialTheme.typography.bodyMedium)

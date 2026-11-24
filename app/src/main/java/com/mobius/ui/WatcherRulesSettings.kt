@@ -5,7 +5,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -40,6 +39,7 @@ import kotlinx.coroutines.launch
  */
 @Composable
 fun WatcherRulesSection(app: MobiusApp) {
+    val strings = LocalStrings.current
     val scope = rememberCoroutineScope()
     val rulesStore = remember(app) { WatcherRules(app) }
     val rules by rulesStore.observeRules().collectAsState(initial = emptyList())
@@ -55,16 +55,15 @@ fun WatcherRulesSection(app: MobiusApp) {
     var formNote by remember { mutableStateOf<String?>(null) }
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("WA watcher — aturan balasan", style = MaterialTheme.typography.titleMedium)
         Text(
-            "Watcher hanya jalan bila flag \"WA watcher\" ON dan ada aturan di bawah ini. " +
-                "Tanpa aturan, tidak ada yang dibalas otomatis. Membuat aturan = persetujuan " +
-                "berdiri untuk mengirim teks balasan itu persis apa adanya.",
-            style = MaterialTheme.typography.bodySmall,
+            strings.watcherTitle,
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.tertiary,
         )
+        Text(strings.watcherDesc, style = MaterialTheme.typography.bodySmall)
         if (!watcherOn) {
             Text(
-                "Watcher sedang OFF (flag WA watcher dimatikan). Pesan WhatsApp hanya dicatat, tidak dibalas.",
+                strings.watcherOff,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
             )
@@ -72,35 +71,38 @@ fun WatcherRulesSection(app: MobiusApp) {
 
         // ---- pending drafts waiting for approval (rules with auto-send OFF) ----
         if (pendingDrafts.isNotEmpty()) {
-            Text("Draf menunggu persetujuanmu", style = MaterialTheme.typography.titleSmall)
+            Text(strings.watcherPendingTitle, style = MaterialTheme.typography.titleSmall)
             pendingDrafts.forEach { draft ->
                 Column(
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Text("Dari ${draft.sender} (aturan \"${draft.ruleName}\")", style = MaterialTheme.typography.bodyMedium)
-                    Text("Pesan: ${draft.incomingText}", style = MaterialTheme.typography.bodySmall)
-                    Text("Balasan: ${draft.replyText}", style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        strings.watcherFrom.format(draft.sender, draft.ruleName),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Text(strings.watcherIncoming.format(draft.incomingText), style = MaterialTheme.typography.bodySmall)
+                    Text(strings.watcherReply.format(draft.replyText), style = MaterialTheme.typography.bodySmall)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = {
+                        GradientButton(onClick = {
                             scope.launch {
                                 val ok = app.watcherEngine().sendPending(draft.id)
-                                formNote = if (ok) "Draf terkirim ke ${draft.sender}."
-                                else "Gagal mengirim — aksi balas sudah kedaluwarsa, kirim manual dari WhatsApp."
+                                formNote = if (ok) strings.watcherSent.format(draft.sender)
+                                else strings.watcherSendFailed
                             }
-                        }) { Text("Kirim") }
+                        }) { Text(strings.watcherSend) }
                         OutlinedButton(onClick = {
                             scope.launch { app.watcherEngine().discardPending(draft.id) }
-                        }) { Text("Buang") }
+                        }) { Text(strings.watcherDiscard) }
                     }
                 }
             }
         }
 
         // ---- existing rules ----
-        Text("Aturan", style = MaterialTheme.typography.titleSmall)
+        Text(strings.watcherRulesTitle, style = MaterialTheme.typography.titleSmall)
         if (rules.isEmpty()) {
-            Text("Belum ada aturan — watcher tidak membalas apa pun.", style = MaterialTheme.typography.bodySmall)
+            Text(strings.watcherRulesEmpty, style = MaterialTheme.typography.bodySmall)
         }
         rules.forEach { rule ->
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -112,19 +114,19 @@ fun WatcherRulesSection(app: MobiusApp) {
                     )
                 }
                 Text(
-                    "Cocok: " +
-                        (if (rule.matchText.isNotBlank()) "teks mengandung \"${rule.matchText}\"" else "") +
+                    strings.watcherMatchPrefix +
+                        (if (rule.matchText.isNotBlank()) strings.watcherMatchText.format(rule.matchText) else "") +
                         (if (rule.matchText.isNotBlank() && rule.sender.isNotBlank()) " + " else "") +
-                        (if (rule.sender.isNotBlank()) "pengirim mengandung \"${rule.sender}\"" else ""),
+                        (if (rule.sender.isNotBlank()) strings.watcherMatchSender.format(rule.sender) else ""),
                     style = MaterialTheme.typography.bodySmall,
                 )
-                Text("Balas: \"${rule.replyTemplate}\"", style = MaterialTheme.typography.bodySmall)
+                Text(strings.watcherReplyIs.format(rule.replyTemplate), style = MaterialTheme.typography.bodySmall)
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Text(
-                        if (rule.autoSend) "Auto-send ON (langsung terkirim)" else "Auto-send OFF (draf ditahan)",
+                        if (rule.autoSend) strings.watcherAutoOn else strings.watcherAutoOff,
                         style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.weight(1f),
                     )
@@ -133,38 +135,37 @@ fun WatcherRulesSection(app: MobiusApp) {
                         onCheckedChange = { v -> scope.launch { rulesStore.setAutoSend(rule.id, v) } },
                     )
                     OutlinedButton(onClick = { scope.launch { rulesStore.deleteRule(rule.id) } }) {
-                        Text("Hapus")
+                        Text(strings.watcherDelete)
                     }
                 }
             }
         }
 
         // ---- add a rule ----
-        Text("Tambah aturan", style = MaterialTheme.typography.titleSmall)
+        Text(strings.watcherAddTitle, style = MaterialTheme.typography.titleSmall)
         OutlinedTextField(
             value = name, onValueChange = { name = it },
-            label = { Text("Nama aturan (mis. \"Lagi sibuk\")") },
+            label = { Text(strings.watcherNameLabel) },
             modifier = Modifier.fillMaxWidth(), singleLine = true,
         )
         OutlinedTextField(
             value = matchText, onValueChange = { matchText = it },
-            label = { Text("Teks pesan mengandung… (mis. \"lagi di mana\")") },
+            label = { Text(strings.watcherMatchLabel) },
             modifier = Modifier.fillMaxWidth(), singleLine = true,
         )
         OutlinedTextField(
             value = sender, onValueChange = { sender = it },
-            label = { Text("Pengirim mengandung… (opsional, mis. \"Budi\")") },
+            label = { Text(strings.watcherSenderLabel) },
             modifier = Modifier.fillMaxWidth(), singleLine = true,
         )
         OutlinedTextField(
             value = replyTemplate, onValueChange = { replyTemplate = it },
-            label = { Text("Teks balasan persis (mis. \"Tuan sedang sibuk\")") },
+            label = { Text(strings.watcherReplyLabel) },
             modifier = Modifier.fillMaxWidth(),
         )
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                "Auto-send: ON = balasan langsung terkirim tanpa konfirmasi. " +
-                    "OFF = draf ditahan, kamu yang tekan Kirim.",
+                strings.watcherAutoDesc,
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.weight(1f).padding(end = 8.dp),
             )
@@ -172,19 +173,19 @@ fun WatcherRulesSection(app: MobiusApp) {
         }
         formError?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
         formNote?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-        Button(onClick = {
+        GradientButton(onClick = {
             scope.launch {
                 val created = rulesStore.addRule(name, matchText, sender, replyTemplate, autoSend)
                 if (created == null) {
                     formNote = null
-                    formError = "Isi teks balasan, dan isi minimal satu: teks pesan atau pengirim."
+                    formError = strings.watcherFormError
                 } else {
                     formError = null
-                    formNote = "Aturan \"${created.name}\" dibuat" +
-                        (if (created.autoSend) " — balasan akan langsung terkirim saat cocok." else " — balasan ditahan sebagai draf saat cocok.")
+                    formNote = strings.watcherRuleCreated.format(created.name) +
+                        (if (created.autoSend) strings.watcherRuleCreatedAuto else strings.watcherRuleCreatedDraft)
                     name = ""; matchText = ""; sender = ""; replyTemplate = ""; autoSend = false
                 }
             }
-        }) { Text("Tambah aturan") }
+        }) { Text(strings.watcherAddButton) }
     }
 }

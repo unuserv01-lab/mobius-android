@@ -17,6 +17,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.longPreferencesKey
+import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.mobius.accessibility.MobiusAccessibilityService
 import kotlinx.coroutines.flow.Flow
@@ -50,6 +51,11 @@ class PermissionManager(context: Context) {
         val TTL_SECONDS = longPreferencesKey("memory_ttl_seconds")
         val ONBOARDING_DONE = booleanPreferencesKey("onboarding_done")
         val BUBBLE_ENABLED = booleanPreferencesKey("bubble_enabled")
+        // v7.2 — OpenRouter fallback: key + model. The key is stored on the phone
+        // only, in the same app-private DataStore; it is NEVER logged or shown
+        // in full anywhere in the app.
+        val OPENROUTER_KEY = stringPreferencesKey("openrouter_api_key")
+        val OPENROUTER_MODEL = stringPreferencesKey("openrouter_model")
     }
 
     // ----- preferences -----
@@ -58,14 +64,23 @@ class PermissionManager(context: Context) {
     val memoryTtlSeconds: Flow<Long> = store.data.map { it[Keys.TTL_SECONDS] ?: AppConfig.DEFAULT_TTL_SECONDS }
     val onboardingDone: Flow<Boolean> = store.data.map { it[Keys.ONBOARDING_DONE] ?: false }
     val bubbleEnabled: Flow<Boolean> = store.data.map { it[Keys.BUBBLE_ENABLED] ?: false }
+    // v7.2 — OpenRouter fallback settings (blank key = fallback inactive).
+    val openRouterApiKey: Flow<String> = store.data.map { it[Keys.OPENROUTER_KEY] ?: "" }
+    val openRouterModel: Flow<String> =
+        store.data.map { it[Keys.OPENROUTER_MODEL] ?: AppConfig.DEFAULT_OPENROUTER_MODEL }
 
     suspend fun isCloudAiAllowed(): Boolean = cloudAiAllowed.first()
+
+    suspend fun getOpenRouterApiKey(): String = openRouterApiKey.first()
+    suspend fun getOpenRouterModel(): String = openRouterModel.first()
 
     suspend fun setCloudAiAllowed(value: Boolean) = store.edit { it[Keys.CLOUD_AI] = value }
     suspend fun setConfirmBeforeSend(value: Boolean) = store.edit { it[Keys.CONFIRM_SEND] = value }
     suspend fun setMemoryTtlSeconds(value: Long) = store.edit { it[Keys.TTL_SECONDS] = value }
     suspend fun setOnboardingDone(value: Boolean) = store.edit { it[Keys.ONBOARDING_DONE] = value }
     suspend fun setBubbleEnabled(value: Boolean) = store.edit { it[Keys.BUBBLE_ENABLED] = value }
+    suspend fun setOpenRouterApiKey(value: String) = store.edit { it[Keys.OPENROUTER_KEY] = value }
+    suspend fun setOpenRouterModel(value: String) = store.edit { it[Keys.OPENROUTER_MODEL] = value }
 
     // ----- Android permission state -----
     fun status(): PermissionStatus = PermissionStatus(

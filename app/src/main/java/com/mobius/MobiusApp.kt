@@ -12,6 +12,7 @@ import com.mobius.agent.AgentFactory
 import com.mobius.ai.AIRouter
 import com.mobius.ai.CloudAI
 import com.mobius.ai.OnDeviceAI
+import com.mobius.ai.OpenRouterAI
 import com.mobius.core.ContextManager
 import com.mobius.core.FeatureFlags
 import com.mobius.core.MemoryStore
@@ -37,7 +38,7 @@ class MobiusApp : Application() {
     val permissions by lazy { PermissionManager(this) }
     val featureFlags by lazy { FeatureFlags(this) }
     val onDeviceAI by lazy { OnDeviceAI() }
-    val aiRouter by lazy { AIRouter(onDeviceAI, CloudAI(), permissions, memoryStore) }
+    val aiRouter by lazy { AIRouter(onDeviceAI, CloudAI(), permissions, memoryStore, OpenRouterAI()) }
     val skillRegistry by lazy { SkillRegistry(this) }
     val skillRunner by lazy { SkillRunner() }
     val orchestrator by lazy {

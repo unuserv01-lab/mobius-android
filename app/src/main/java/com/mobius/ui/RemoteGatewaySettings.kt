@@ -4,7 +4,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -41,6 +40,7 @@ import kotlinx.coroutines.launch
  */
 @Composable
 fun RemoteGatewaySection(app: MobiusApp) {
+    val strings = LocalStrings.current
     val gateway = remember { RemoteGateway(app, app.featureFlags) }
     val scope = rememberCoroutineScope()
 
@@ -54,7 +54,7 @@ fun RemoteGatewaySection(app: MobiusApp) {
     var tokenDraft by remember { mutableStateOf("") }
     var draftsLoaded by remember { mutableStateOf(false) }
     var healthStatus by remember { mutableStateOf<String?>(null) }
-    var testTaskText by remember { mutableStateOf("ringkas halaman ini") }
+    var testTaskText by remember { mutableStateOf(strings.gwTaskDefault) }
     var testResult by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
 
@@ -68,15 +68,15 @@ fun RemoteGatewaySection(app: MobiusApp) {
     }
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text("Remote gateway (laptop bridge)", style = MaterialTheme.typography.titleMedium)
         Text(
-            "HP mengirim tugas ke bridge di laptop lewat Wi-Fi yang sama. " +
-                "Bridge harus jalan di laptop dengan --lan (lihat bridge README).",
-            style = MaterialTheme.typography.bodySmall,
+            strings.gwTitle,
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.tertiary,
         )
+        Text(strings.gwDesc, style = MaterialTheme.typography.bodySmall)
         if (!gatewayEnabled) {
             Text(
-                "Remote gateway dimatikan di feature flags — tidak ada panggilan remote, HP jalan lokal saja.",
+                strings.gwDisabled,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
             )
@@ -85,79 +85,71 @@ fun RemoteGatewaySection(app: MobiusApp) {
         OutlinedTextField(
             value = addressDraft,
             onValueChange = { addressDraft = it },
-            label = { Text("Alamat bridge") },
+            label = { Text(strings.gwAddressLabel) },
             placeholder = { Text(RemoteGateway.DEFAULT_BRIDGE_ADDRESS) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
-        Text(
-            "Contoh: ${RemoteGateway.DEFAULT_BRIDGE_ADDRESS} — ganti 192.168.1.100 dengan IP LAN " +
-                "laptop Tuan (di laptop: ipconfig di Windows / ifconfig di Linux/Mac).",
-            style = MaterialTheme.typography.bodySmall,
-        )
+        Text(strings.gwAddressExample.format(RemoteGateway.DEFAULT_BRIDGE_ADDRESS), style = MaterialTheme.typography.bodySmall)
 
         OutlinedTextField(
             value = tokenDraft,
             onValueChange = { tokenDraft = it },
-            label = { Text("Token bridge") },
+            label = { Text(strings.gwTokenLabel) },
             singleLine = true,
             visualTransformation = PasswordVisualTransformation(),
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
             modifier = Modifier.fillMaxWidth(),
         )
-        Text(
-            "Token yang sama dengan MOBIUS_BRIDGE_TOKEN saat menjalankan bridge di laptop. " +
-                "Token hanya tersimpan di HP ini, tidak pernah dikirim ke mana pun selain bridge.",
-            style = MaterialTheme.typography.bodySmall,
-        )
+        Text(strings.gwTokenDesc, style = MaterialTheme.typography.bodySmall)
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(
+            GradientButton(
                 onClick = {
                     scope.launch {
                         gateway.saveSettings(addressDraft, tokenDraft)
-                        healthStatus = "Disimpan."
+                        healthStatus = strings.gwSaved
                     }
                 },
-            ) { Text("Simpan") }
+            ) { Text(strings.gwSave) }
             OutlinedButton(
                 enabled = gatewayEnabled && !busy,
                 onClick = {
                     scope.launch {
                         busy = true
-                        healthStatus = "Menguji koneksi…"
+                        healthStatus = strings.gwTesting
                         gateway.saveSettings(addressDraft, tokenDraft)
                         healthStatus = if (gateway.health()) {
-                            "Bridge terjangkau."
+                            strings.gwReachable
                         } else {
-                            "Bridge tidak terjangkau — periksa alamat, Wi-Fi yang sama, dan bridge jalan dengan --lan."
+                            strings.gwUnreachable
                         }
                         busy = false
                     }
                 },
-            ) { Text("Test connection") }
+            ) { Text(strings.gwTest) }
         }
         healthStatus?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
 
         OutlinedTextField(
             value = testTaskText,
             onValueChange = { testTaskText = it },
-            label = { Text("Tugas tes") },
+            label = { Text(strings.gwTaskLabel) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
-        Button(
+        GradientButton(
             enabled = gatewayEnabled && !busy,
             onClick = {
                 scope.launch {
                     busy = true
-                    testResult = "Mengirim ke bridge…"
+                    testResult = strings.gwSending
                     gateway.saveSettings(addressDraft, tokenDraft)
                     testResult = gateway.sendTaskAndWait(testTaskText)
                     busy = false
                 }
             },
-        ) { Text("Kirim tugas tes") }
+        ) { Text(strings.gwSendTask) }
         testResult?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
     }
 }

@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -28,18 +27,26 @@ import com.mobius.ai.NanoStatus
 import com.mobius.core.AppConfig
 import kotlinx.coroutines.launch
 
-private val TTL_CHOICES = listOf("1 hour" to 3_600L, "24 hours" to 86_400L, "7 days" to 604_800L)
-
 /** Cloud-AI gate (default OFF), send confirmation, TTL, Gemini Nano status, memory wipe. */
 @Composable
 fun SettingsScreen(app: MobiusApp, onRerunSetup: () -> Unit) {
+    val strings = LocalStrings.current
     val pm = app.permissions
     val scope = rememberCoroutineScope()
     val cloudAllowed by pm.cloudAiAllowed.collectAsState(initial = false)
     val confirmSend by pm.confirmBeforeSend.collectAsState(initial = true)
     val ttl by pm.memoryTtlSeconds.collectAsState(initial = AppConfig.DEFAULT_TTL_SECONDS)
-    var nanoText by remember { mutableStateOf("not checked yet") }
+    var nanoText by remember(strings) { mutableStateOf(strings.setNanoNotChecked) }
     var nanoStatus by remember { mutableStateOf<NanoStatus?>(null) }
+    // v7 — language: same DataStore setting the bubble Service reads; a change
+    // recomposes both roots immediately (no restart, no reinstall).
+    val languageManager = remember { LanguageManager(app.applicationContext) }
+    val lang by languageManager.language.collectAsState(initial = AppLanguage.ID)
+    val ttlChoices = listOf(
+        strings.setTtl1h to 3_600L,
+        strings.setTtl24h to 86_400L,
+        strings.setTtl7d to 604_800L,
+    )
 
     Column(
         Modifier
@@ -47,40 +54,73 @@ fun SettingsScreen(app: MobiusApp, onRerunSetup: () -> Unit) {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp),
     ) {
-        Text("Settings", style = MaterialTheme.typography.headlineSmall)
+        Text(
+            strings.setTitle,
+            style = MaterialTheme.typography.headlineSmall.copy(brush = MobiusGradientBrush),
+        )
+
+        // ---- Language (v7) ----
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                strings.setLangTitle,
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.tertiary,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(
+                    selected = lang == AppLanguage.ID,
+                    onClick = { scope.launch { languageManager.setLanguage(AppLanguage.ID) } },
+                    label = { Text(strings.setLangId) },
+                )
+                FilterChip(
+                    selected = lang == AppLanguage.EN,
+                    onClick = { scope.launch { languageManager.setLanguage(AppLanguage.EN) } },
+                    label = { Text(strings.setLangEn) },
+                )
+            }
+            Text(strings.setLangDesc, style = MaterialTheme.typography.bodySmall)
+        }
 
         // ---- Cloud AI gate ----
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Allow cloud AI", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                Text(
+                    strings.setAllowCloud,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.tertiary,
+                    modifier = Modifier.weight(1f),
+                )
                 Switch(checked = cloudAllowed, onCheckedChange = { v -> scope.launch { pm.setCloudAiAllowed(v) } })
             }
-            Text(
-                "OFF by default. Gemini Nano on your device is always tried first. When this is ON, " +
-                    "${AppConfig.APP_NAME} may send the text of a request (and, for reply tasks, the message " +
-                    "you are replying to) to Gemini in the cloud, but only if the task is heavy or Nano is " +
-                    "unavailable. Every routing decision is listed in History. Your stored memory is never sent.",
-                style = MaterialTheme.typography.bodySmall,
-            )
+            Text(strings.setAllowCloudDesc, style = MaterialTheme.typography.bodySmall)
         }
+
+        // ---- Fallback model (OpenRouter, v7.2) ----
+        OpenRouterSection(app)
 
         // ---- Confirm before send ----
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Confirm before sending", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                Text(
+                    strings.setConfirmSend,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.tertiary,
+                    modifier = Modifier.weight(1f),
+                )
                 Switch(checked = confirmSend, onCheckedChange = { v -> scope.launch { pm.setConfirmBeforeSend(v) } })
             }
-            Text(
-                "Show the drafted reply and ask before anything is sent on your behalf.",
-                style = MaterialTheme.typography.bodySmall,
-            )
+            Text(strings.setConfirmSendDesc, style = MaterialTheme.typography.bodySmall)
         }
 
         // ---- TTL ----
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Keep memory and logs for", style = MaterialTheme.typography.titleMedium)
+            Text(
+                strings.setTtlTitle,
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.tertiary,
+            )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TTL_CHOICES.forEach { (label, seconds) ->
+                ttlChoices.forEach { (label, seconds) ->
                     FilterChip(
                         selected = ttl == seconds,
                         onClick = { scope.launch { pm.setMemoryTtlSeconds(seconds) } },
@@ -88,13 +128,17 @@ fun SettingsScreen(app: MobiusApp, onRerunSetup: () -> Unit) {
                     )
                 }
             }
-            Text("Applies to new entries. Expired entries are deleted automatically.", style = MaterialTheme.typography.bodySmall)
+            Text(strings.setTtlApplies, style = MaterialTheme.typography.bodySmall)
         }
 
         // ---- Gemini Nano ----
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("On-device AI (Gemini Nano)", style = MaterialTheme.typography.titleMedium)
-            Text("Status: $nanoText", style = MaterialTheme.typography.bodyMedium)
+            Text(
+                strings.setNanoTitle,
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.tertiary,
+            )
+            Text(strings.setNanoStatusPrefix + nanoText, style = MaterialTheme.typography.bodyMedium)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = {
                     scope.launch {
@@ -102,24 +146,20 @@ fun SettingsScreen(app: MobiusApp, onRerunSetup: () -> Unit) {
                         nanoStatus = s
                         nanoText = s.label
                     }
-                }) { Text("Check") }
+                }) { Text(strings.setNanoCheck) }
                 if (nanoStatus == NanoStatus.DOWNLOADABLE) {
-                    Button(onClick = {
+                    GradientButton(onClick = {
                         scope.launch {
                             try {
                                 app.onDeviceAI.download().collect { nanoText = it }
                             } catch (e: Exception) {
-                                nanoText = "Download failed: ${e.message}"
+                                nanoText = strings.setNanoDownloadFailed.format(e.message)
                             }
                         }
-                    }) { Text("Download Nano") }
+                    }) { Text(strings.setNanoDownload) }
                 }
             }
-            Text(
-                "Needs a device with AICore support (for example recent Pixel or select Samsung phones). " +
-                    "If unavailable, ${AppConfig.APP_NAME} falls back to cloud Gemini only when you allow it.",
-                style = MaterialTheme.typography.bodySmall,
-            )
+            Text(strings.setNanoDesc, style = MaterialTheme.typography.bodySmall)
         }
 
         // ---- v6 feature flags (Step 0) ----
@@ -132,14 +172,18 @@ fun SettingsScreen(app: MobiusApp, onRerunSetup: () -> Unit) {
 
         // ---- Data & setup ----
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Your data", style = MaterialTheme.typography.titleMedium)
+            Text(
+                strings.setDataTitle,
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.tertiary,
+            )
             OutlinedButton(onClick = { scope.launch { app.memoryStore.clearAll() } }) {
-                Text("Delete all memory and logs")
+                Text(strings.setDataDelete)
             }
             OutlinedButton(
                 onClick = { scope.launch { pm.setOnboardingDone(false); onRerunSetup() } },
                 modifier = Modifier.fillMaxWidth(),
-            ) { Text("Review permissions again") }
+            ) { Text(strings.setDataReview) }
         }
     }
 }

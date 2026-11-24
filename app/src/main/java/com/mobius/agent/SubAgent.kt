@@ -5,6 +5,7 @@ import com.mobius.accessibility.ScreenReader
 import com.mobius.ai.AIRouter
 import com.mobius.core.RoutedIntent
 import com.mobius.notification.CapturedNotification
+import com.mobius.ui.AppLanguage
 
 /** Everything a subagent may look at for one task. Built by the core's ContextManager. */
 data class TaskContext(
@@ -40,6 +41,9 @@ interface AgentTools {
     val ai: AIRouter
     val reader: ScreenReader?
     val executor: ActionExecutor?
+
+    /** UI language for this task's agent messages (v7.4). Default ID; the core overrides it. */
+    val language: AppLanguage get() = AppLanguage.ID
 
     /** Short progress text shown next to the bubble. */
     fun status(message: String)

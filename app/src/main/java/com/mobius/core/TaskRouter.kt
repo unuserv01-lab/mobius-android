@@ -6,7 +6,7 @@ import com.mobius.ai.PromptBuilder
 import org.json.JSONObject
 
 /** Which kind of temporary worker a request needs. */
-enum class AgentType { REPLY_WHATSAPP, CHAT, SKILL }
+enum class AgentType { REPLY_WHATSAPP, CHAT, SKILL, SUMMARIZE_PAGE }
 
 data class RoutedIntent(
     val type: AgentType,
@@ -103,6 +103,7 @@ class TaskRouter(private val ai: AIRouter, private val registry: SkillRegistry) 
         val json = JSONObject(raw.substring(raw.indexOf('{'), raw.lastIndexOf('}') + 1))
         val type = when (json.optString("intent").lowercase()) {
             "reply_whatsapp" -> AgentType.REPLY_WHATSAPP
+            "summarize_page" -> AgentType.SUMMARIZE_PAGE
             "chat" -> AgentType.CHAT
             else -> throw IllegalArgumentException("unknown intent")
         }
@@ -114,6 +115,19 @@ class TaskRouter(private val ai: AIRouter, private val registry: SkillRegistry) 
 
     private fun heuristic(raw: String, userText: String): RoutedIntent {
         val t = userText.lowercase()
+        // v7.4 — summarize the current page: exact phrases first, then the
+        // (ringkas|rangkum|summarize) + (halaman|page|ini|artikel|berita|layar) pattern.
+        // Checked before the WhatsApp rule: a summarize request never mentions WA.
+        val summarizePhrases = listOf(
+            "ringkas halaman ini", "rangkum halaman ini", "summarize this page",
+            "apa isi halaman ini", "ringkas ini",
+        )
+        val wantsSummarize = summarizePhrases.any { it in t } ||
+            (listOf("ringkas", "rangkum", "summarize").any { it in t } &&
+                listOf("halaman", "page", "ini", "artikel", "berita", "layar").any { it in t })
+        if (wantsSummarize) {
+            return RoutedIntent(AgentType.SUMMARIZE_PAGE, replyText = null, raw = raw)
+        }
         val mentionsWa = "whatsapp" in t || Regex("\\bwa\\b").containsMatchIn(t)
         val wantsReply = listOf("reply", "balas", "jawab", "respond").any { it in t }
         return RoutedIntent(

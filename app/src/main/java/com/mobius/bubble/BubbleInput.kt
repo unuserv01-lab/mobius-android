@@ -11,10 +11,11 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -33,6 +34,9 @@ import androidx.compose.ui.unit.dp
 import com.mobius.core.AppConfig
 import com.mobius.core.ChatMessage
 import com.mobius.ui.ChatHistoryView
+import com.mobius.ui.GradientButton
+import com.mobius.ui.LocalStrings
+import com.mobius.ui.MobiusGradientBrush
 
 /** What the floating panel is currently showing. */
 sealed interface PanelState {
@@ -73,6 +77,7 @@ fun BubblePanel(
     autoScrolling: Boolean = false,
     onToggleAutoScroll: () -> Unit = {},
 ) {
+    val strings = LocalStrings.current
     Surface(
         shape = RoundedCornerShape(20.dp),
         color = MaterialTheme.colorScheme.surface,
@@ -83,10 +88,15 @@ fun BubblePanel(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = AppConfig.APP_NAME,
-                    style = MaterialTheme.typography.titleMedium,
+                    style = MaterialTheme.typography.titleMedium.copy(brush = MobiusGradientBrush),
                     modifier = Modifier.weight(1f),
                 )
-                TextButton(onClick = onClose) { Text(if (state is PanelState.Confirm) "Cancel" else "Close") }
+                TextButton(
+                    onClick = onClose,
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    ),
+                ) { Text(if (state is PanelState.Confirm) strings.panelCancel else strings.panelClose) }
             }
             when (state) {
                 is PanelState.Input -> InputBody(
@@ -120,6 +130,7 @@ private fun InputBody(
     autoScrolling: Boolean = false,
     onToggleAutoScroll: () -> Unit = {},
 ) {
+    val strings = LocalStrings.current
     var text by remember { mutableStateOf("") }
     var listening by remember { mutableStateOf(false) }
     var voiceHint by remember { mutableStateOf<String?>(null) }
@@ -137,9 +148,15 @@ private fun InputBody(
             modifier = Modifier
                 .weight(1f)
                 .focusRequester(focus),
-            placeholder = { Text("e.g. Reply to the last WhatsApp message") },
+            placeholder = { Text(strings.inputPlaceholder) },
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
             keyboardActions = KeyboardActions(onSend = { if (text.isNotBlank()) onSubmit(text) }),
+            shape = RoundedCornerShape(16.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = MaterialTheme.colorScheme.primary,
+                unfocusedBorderColor = MaterialTheme.colorScheme.outline,
+                cursorColor = MaterialTheme.colorScheme.primary,
+            ),
         )
         OutlinedButton(
             onClick = {
@@ -149,7 +166,7 @@ private fun InputBody(
                 onVoice { heard ->
                     listening = false
                     if (heard.isNullOrBlank()) {
-                        voiceHint = "Couldn't hear that — try typing."
+                        voiceHint = strings.inputVoiceHint
                     } else {
                         onSubmit(heard)
                     }
@@ -157,10 +174,10 @@ private fun InputBody(
             },
             enabled = !listening,
             modifier = Modifier.padding(start = 8.dp),
-        ) { Text(if (listening) "..." else "Mic") }
+        ) { Text(if (listening) "..." else strings.inputMic) }
     }
     if (listening) {
-        Text("Listening... speak now.", style = MaterialTheme.typography.bodySmall)
+        Text(strings.inputListening, style = MaterialTheme.typography.bodySmall)
     }
     voiceHint?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
     // v6 (N-UI): attach goes through MainActivity's picker (a Service cannot
@@ -170,7 +187,7 @@ private fun InputBody(
         OutlinedButton(
             onClick = onAttach,
             modifier = Modifier.fillMaxWidth(),
-        ) { Text("Lampirkan file / foto") }
+        ) { Text(strings.inputAttach) }
     }
     // v6 (G): starts the deterministic swipe loop; the panel closes so the
     // underlying app is visible, and Stop lives on the bubble itself.
@@ -178,18 +195,19 @@ private fun InputBody(
         OutlinedButton(
             onClick = onToggleAutoScroll,
             modifier = Modifier.fillMaxWidth(),
-        ) { Text(if (autoScrolling) "Stop auto-scroll" else "Mulai auto-scroll") }
+        ) { Text(if (autoScrolling) strings.inputAutoStop else strings.inputAutoStart) }
     }
-    Button(
+    GradientButton(
         onClick = { onSubmit(text) },
         enabled = text.isNotBlank(),
         modifier = Modifier.fillMaxWidth(),
-    ) { Text("Run") }
+    ) { Text(strings.inputRun) }
 }
 
 @Composable
 private fun ConfirmBody(state: PanelState.Confirm) {
-    Text("Send this reply to ${state.sender}?", style = MaterialTheme.typography.bodyMedium)
+    val strings = LocalStrings.current
+    Text(strings.confirmTitle.format(state.sender), style = MaterialTheme.typography.bodyMedium)
     Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
         Text(
             text = state.draft,
@@ -201,15 +219,16 @@ private fun ConfirmBody(state: PanelState.Confirm) {
         )
     }
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-        OutlinedButton(onClick = { state.decide(false) }, modifier = Modifier.weight(1f)) { Text("Don't send") }
-        Button(onClick = { state.decide(true) }, modifier = Modifier.weight(1f)) { Text("Send") }
+        OutlinedButton(onClick = { state.decide(false) }, modifier = Modifier.weight(1f)) { Text(strings.confirmDontSend) }
+        GradientButton(onClick = { state.decide(true) }, modifier = Modifier.weight(1f)) { Text(strings.confirmSend) }
     }
 }
 
 /** (v5) Plan card: skill name + resolved steps, Jalankan / Batal. Nothing runs until Jalankan. */
 @Composable
 private fun PlanBody(state: PanelState.Plan) {
-    Text("Langkah yang akan dijalankan", style = MaterialTheme.typography.titleMedium)
+    val strings = LocalStrings.current
+    Text(strings.planTitle, style = MaterialTheme.typography.titleMedium)
     Text(state.skillName, style = MaterialTheme.typography.titleSmall)
     Column(
         modifier = Modifier
@@ -220,19 +239,20 @@ private fun PlanBody(state: PanelState.Plan) {
         state.steps.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
     }
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-        OutlinedButton(onClick = { state.decide(false) }, modifier = Modifier.weight(1f)) { Text("Batal") }
-        Button(onClick = { state.decide(true) }, modifier = Modifier.weight(1f)) { Text("Jalankan") }
+        OutlinedButton(onClick = { state.decide(false) }, modifier = Modifier.weight(1f)) { Text(strings.planCancel) }
+        GradientButton(onClick = { state.decide(true) }, modifier = Modifier.weight(1f)) { Text(strings.planRun) }
     }
 }
 
 /** (v5) One irreversible step (ActionGate): approve it, or the skill aborts. */
 @Composable
 private fun StepConfirmBody(state: PanelState.StepConfirm) {
-    Text("Langkah tak terbalikkan", style = MaterialTheme.typography.titleMedium)
+    val strings = LocalStrings.current
+    Text(strings.stepTitle, style = MaterialTheme.typography.titleMedium)
     Text(state.description, style = MaterialTheme.typography.bodyMedium)
-    Text("Lanjutkan langkah ini?", style = MaterialTheme.typography.bodyMedium)
+    Text(strings.stepQuestion, style = MaterialTheme.typography.bodyMedium)
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-        OutlinedButton(onClick = { state.decide(false) }, modifier = Modifier.weight(1f)) { Text("Batalkan") }
-        Button(onClick = { state.decide(true) }, modifier = Modifier.weight(1f)) { Text("Lanjutkan") }
+        OutlinedButton(onClick = { state.decide(false) }, modifier = Modifier.weight(1f)) { Text(strings.stepCancel) }
+        GradientButton(onClick = { state.decide(true) }, modifier = Modifier.weight(1f)) { Text(strings.stepContinue) }
     }
 }

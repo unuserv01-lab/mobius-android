@@ -13,7 +13,10 @@ import com.mobius.agent.PlanningAgent
 import com.mobius.agent.SubAgent
 import com.mobius.ai.AIRouter
 import com.mobius.ai.CloudRequiredException
+import com.mobius.ai.CloudTimeoutException
 import com.mobius.ai.PromptBuilder
+import com.mobius.ui.AppLanguage
+import com.mobius.ui.LanguageManager
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -126,7 +129,12 @@ class Orchestrator(
                         q.done.complete(executeTask(q.text, q.hooks))
                     } catch (e: CancellationException) {
                         q.done.completeExceptionally(e)
-                        throw e
+                        // v7.1 (c): do NOT rethrow — the cancellation is already
+                        // delivered to the caller via the deferred. Rethrowing
+                        // would kill this worker and strand every later task
+                        // (bubble stuck on "Understanding your request..."
+                        // forever). A genuinely cancelled worker scope still
+                        // ends the worker at the next channel receive.
                     } catch (e: Exception) {
                         q.done.complete(TaskOutcome(false, "Something went wrong: ${e.message ?: e.javaClass.simpleName}"))
                     }
@@ -142,6 +150,11 @@ class Orchestrator(
             executeSingle(taskId, text, hooks, allowOrchestration = true)
         } catch (e: CancellationException) {
             throw e
+        } catch (e: CloudTimeoutException) {
+            // v7.1 (a): the 30 s cloud timeout surfaces verbatim — no
+            // "Something went wrong:" prefix. (Covers paths with no inner
+            // catch, e.g. Orchestration.decompose.)
+            TaskOutcome(false, e.message ?: "Cloud tidak merespons.")
         } catch (e: Exception) {
             TaskOutcome(false, "Something went wrong: ${e.message ?: e.javaClass.simpleName}")
         }
@@ -194,6 +207,9 @@ class Orchestrator(
             throw e
         } catch (e: CloudRequiredException) {
             return finish(taskId, "router", text, TaskOutcome(false, e.message ?: "Cloud AI required."), emptyList())
+        } catch (e: CloudTimeoutException) {
+            // v7.1 (a): 30 s cloud timeout, verbatim outcome text.
+            return finish(taskId, "router", text, TaskOutcome(false, e.message ?: "Cloud tidak merespons."), emptyList())
         } catch (e: Exception) {
             return finish(taskId, "router", text, TaskOutcome(false, "Something went wrong: ${e.message ?: e.javaClass.simpleName}"), emptyList())
         }
@@ -315,6 +331,9 @@ class Orchestrator(
         throw e
     } catch (e: CloudRequiredException) {
         AgentResult(false, e.message ?: "Cloud AI required.")
+    } catch (e: CloudTimeoutException) {
+        // v7.1 (a): 30 s cloud timeout, verbatim outcome text.
+        AgentResult(false, e.message ?: "Cloud tidak merespons.")
     } catch (e: Exception) {
         AgentResult(false, "Something went wrong: ${e.message ?: e.javaClass.simpleName}")
     }
@@ -411,14 +430,18 @@ class Orchestrator(
     }
 
     /** What the subagent is allowed to use. No memory access, by construction (P5). */
-    private fun buildTools(hooks: TaskHooks): AgentTools {
+    private suspend fun buildTools(hooks: TaskHooks): AgentTools {
         val service = MobiusAccessibilityService.instance
         val reader = service?.let { ScreenReader(it) }
         val executor = if (service != null && reader != null) ActionExecutor(context, service, reader) else null
+        // v7.4 — the task's UI language, so agents can use the ID/EN strings table
+        // (SummarizePageAgent). A read failure keeps the default (ID).
+        val language = runCatching { LanguageManager(context).language.first() }.getOrDefault(AppLanguage.ID)
         return object : AgentTools {
             override val ai: AIRouter = aiRouter
             override val reader: ScreenReader? = reader
             override val executor: ActionExecutor? = executor
+            override val language: AppLanguage = language
             override fun status(message: String) = hooks.status(message)
             override suspend fun confirmSend(sender: String, draft: String): Boolean =
                 if (permissions.confirmBeforeSend.first()) hooks.confirmSend(sender, draft) else true

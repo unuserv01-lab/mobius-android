@@ -6,10 +6,12 @@ import com.mobius.core.ActionGate
 import com.mobius.core.AppConfig
 import com.mobius.core.GateDecision
 import com.mobius.core.GateDecisionRecord
+import com.mobius.core.KnownApps
 import com.mobius.core.RoutedIntent
 import com.mobius.core.StepResult
 import com.mobius.core.Tool
 import com.mobius.core.ToolResult
+import com.mobius.ui.stringsFor
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
@@ -157,9 +159,22 @@ class PlanningAgent(
                 continue
             }
 
+            // --- v7.5: resolve app names to real packages BEFORE the gate and the
+            // tool call. The model may pass a name ("youtube") or invent an id
+            // ("com.youtube.app"); the gate then also checks the REAL package (a
+            // wrong string could otherwise slip past the sensitive-apps list), and
+            // the model sees the resolved package in its own history next step.
+            val args = if (toolName == "launchApp") {
+                val raw = action.args["package"].orEmpty()
+                val resolved = KnownApps.resolvePackage(raw, ctx.userText)
+                if (resolved != null && resolved != raw) action.args + ("package" to resolved) else action.args
+            } else {
+                action.args
+            }
+
             // --- ActionGate (v5 rule, same as SkillRunner): check BEFORE the tool runs. ---
-            val pkg = action.args["package"]?.takeIf { it.isNotBlank() } ?: currentPackage(ctx)
-            val isSend = isSendStep(toolName, action.args, pkg)
+            val pkg = args["package"]?.takeIf { it.isNotBlank() } ?: currentPackage(ctx)
+            val isSend = isSendStep(toolName, args, pkg)
             val risk = if (isSend) ActionGate.RISK_IRREVERSIBLE else null
             val gate = ActionGate.check(toolName, pkg?.takeIf { it.isNotBlank() }, risk)
             when (gate.decision) {
@@ -170,7 +185,7 @@ class PlanningAgent(
                 }
                 GateDecision.NEEDS_APPROVAL -> {
                     // Sends go through confirm-before-send; other irreversible steps via confirmStep.
-                    val desc = "Langkah ${index + 1}: $toolName (${describeArgs(action.args)}) — aksi tak terbalikkan."
+                    val desc = "Langkah ${index + 1}: $toolName (${describeArgs(args)}) — aksi tak terbalikkan."
                     val ok = if (isSend) {
                         val draft = lastTypedText?.takeIf { it.isNotBlank() }
                             ?: "Kirim di ${pkg ?: "aplikasi ini"}"
@@ -193,7 +208,7 @@ class PlanningAgent(
             // --- Execute: the screen lock serializes this with other workers' screen use. ---
             val started = SystemClock.elapsedRealtime()
             val result = try {
-                screenLock.withLock { callTool(tool, toolName, action.args, pkg) }
+                screenLock.withLock { callTool(tool, toolName, args, pkg) }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -201,16 +216,12 @@ class PlanningAgent(
             }
             val duration = SystemClock.elapsedRealtime() - started
             record(index, toolName, result.success, result.message, duration)
-            history += "Step ${index + 1}: $toolName(${describeArgs(action.args)}) -> ${result.message.take(200)}"
-            if (toolName == "type" && result.success) lastTypedText = action.args["text"]
+            history += "Step ${index + 1}: $toolName(${describeArgs(args)}) -> ${result.message.take(200)}"
+            if (toolName == "type" && result.success) lastTypedText = args["text"]
             if (result.success) {
                 consecutiveFailures = 0
             } else if (++consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-                return AgentResult(
-                    false,
-                    "Planning stopped after $MAX_CONSECUTIVE_FAILURES failed steps. " +
-                        "Last failure: ${result.message}",
-                )
+                return AgentResult(false, failureMessage(toolName, args, result))
             }
             // Observe again for the next iteration (also under the screen lock).
             screenSummary = observe(tool, ctx)
@@ -281,6 +292,23 @@ class PlanningAgent(
 
     private fun describeArgs(args: Map<String, String>): String =
         args.entries.joinToString(", ") { (k, v) -> "$k=$v" }
+
+    /**
+     * v7.5 — the 3-strikes failure message. For a failed launch it names the exact
+     * package that was tried, in the active language (so a missing/disabled app is
+     * diagnosable from the message alone, instead of the vague English guess the
+     * model used to write); other tools keep the generic message.
+     */
+    private fun failureMessage(toolName: String, args: Map<String, String>, result: ToolResult): String {
+        if (toolName != "launchApp") {
+            return "Planning stopped after $MAX_CONSECUTIVE_FAILURES failed steps. " +
+                "Last failure: ${result.message}"
+        }
+        val s = stringsFor(tools.language)
+        val pkg = args["package"].orEmpty()
+        val display = KnownApps.displayName(pkg) ?: pkg.ifBlank { "?" }
+        return s.planLaunchFailed.format(display, pkg)
+    }
 
     /** Parses one LLM step: {"done": bool, "summary"?, "tool"?, "args"?}. Null = unparsable. */
     private fun parseAction(raw: String): PlannedAction? = try {

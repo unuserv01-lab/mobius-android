@@ -24,6 +24,11 @@ import kotlinx.coroutines.launch
  *
  * Every [DEFAULT_INTERVAL_MS] (default 30s) it swipes up once (feed-style:
  * next content scrolls into view) via the Layer 1 [Tool.swipe] primitive.
+ * The swipe is a FAST FLING ([FLING_DURATION_MS] = 120ms), NOT the default
+ * 300ms drag: snap pagers (YouTube Shorts, Reels — ViewPager2) need fling
+ * velocity to advance; a slow 300ms drag never crosses the velocity
+ * threshold, snaps back to the current video, and dispatchGesture still
+ * returns true — so the worker would count it as success forever.
  * Stops on [stop] (user taps Stop, or a new task starts) and stops itself
  * after [MAX_FAILURES] consecutive failed swipes (e.g. nothing scrollable
  * on screen) instead of swiping forever at a dead screen.
@@ -69,7 +74,7 @@ class AutoScrollWorker(private val context: Context) {
             try {
                 while (isActive) {
                     delay(intervalMs)
-                    val result = tool.swipe("up")
+                    val result = tool.swipe("up", FLING_DURATION_MS)
                     if (result.success) {
                         failures = 0
                     } else {
@@ -113,6 +118,13 @@ class AutoScrollWorker(private val context: Context) {
     companion object {
         /** Default swipe interval: 30 seconds. */
         const val DEFAULT_INTERVAL_MS = 30_000L
+        /**
+         * Auto-scroll stroke duration: 120ms fling. Snap pagers (YouTube
+         * Shorts, Reels) only advance on a fast fling; the default 300ms
+         * drag snaps back. Skill `swipe` stays at 300ms (precise drags for
+         * lists/forms) — this constant is auto-scroll only.
+         */
+        const val FLING_DURATION_MS = 120L
         private const val MAX_FAILURES = 3
         private const val TAG = "AutoScrollWorker"
     }

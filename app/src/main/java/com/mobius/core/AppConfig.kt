@@ -23,6 +23,24 @@ object AppConfig {
      */
     const val CLOUD_MODEL = "gemini-3.8-flash"
 
+    /**
+     * v7.2 — Default fallback model on OpenRouter (free tier), used only when Gemini
+     * cloud fails (timeout or error) AND Tuan stored an OpenRouter key. User-changeable
+     * in Settings — never the only option, because free models rotate.
+     *
+     * PICKED 24 Nov 2026 from the LIVE list (curl openrouter.ai/api/v1/models:
+     * 473 models, 12 ":free"): "google/gemma-4-26b-a4b-it:free". Why this one:
+     * Google Gemma 4, instruct-tuned (good at the short classification/JSON prompts
+     * MOBIUS sends), NON-reasoning (reasoning ":free" models burn the whole token
+     * budget on reasoning tokens and return null content — verified trap, AGENTS.md),
+     * mid-size 26B (sane latency on the free tier). Rejected: reasoning models
+     * (ling-3.2-flash, nemotron-3-nano-omni reasoning), previews (ernie-5.5-flash-preview,
+     * dots-3-note-preview), unknown vendors (particle-1, flint-v1.0, lfm-3-1.7b),
+     * the 550B ultra MoE (free-tier latency risk), VL-only variants.
+     * Re-check the live list when this stops working — free models come and go.
+     */
+    const val DEFAULT_OPENROUTER_MODEL = "google/gemma-4-26b-a4b-it:free"
+
     /** Default TTL for memory + routing log entries (seconds). User-adjustable in Settings. */
     const val DEFAULT_TTL_SECONDS = 86_400L
 

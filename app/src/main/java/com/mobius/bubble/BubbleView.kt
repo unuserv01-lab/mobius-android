@@ -3,29 +3,41 @@ package com.mobius.bubble
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.mobius.R
+import com.mobius.ui.LocalStrings
+import com.mobius.ui.MobiusGlow
+import com.mobius.ui.MobiusGradientBrush
 import kotlin.math.abs
 
 /**
@@ -36,6 +48,14 @@ import kotlin.math.abs
  * the bubble — tapping it stops the loop. The bubble itself is a separate
  * overlay window from the panel, so the Stop button stays reachable while
  * the user reads another app.
+ *
+ * v7 — bubble follows the LOGO's color DNA (Tuan's order): the actual logo
+ * image as the mark (no text glyph), on the purple-blue gradient with the
+ * accent glow. A progress ring spins over the logo while a task runs.
+ * v7 — unread-reply badge: a small accent circle ABOVE the chip with the
+ * count of agent replies that arrived while the panel was closed ("9+"
+ * over 9). Tapping the bubble/badge opens the panel and BubbleService
+ * resets the count to 0.
  */
 @Composable
 fun BubbleView(
@@ -43,32 +63,63 @@ fun BubbleView(
     working: Boolean,
     autoScrolling: Boolean = false,
     onStopAutoScroll: () -> Unit = {},
+    unreadCount: Int = 0,
 ) {
+    val strings = LocalStrings.current
     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(4.dp)) {
+        if (unreadCount > 0) {
+            Row(modifier = Modifier.width(56.dp), horizontalArrangement = Arrangement.End) {
+                Box(
+                    modifier = Modifier
+                        .sizeIn(minWidth = 28.dp, minHeight = 28.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.tertiary),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = if (unreadCount > 9) "9+" else unreadCount.toString(),
+                        color = MaterialTheme.colorScheme.onTertiary,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                    )
+                }
+            }
+            Spacer(Modifier.height(2.dp))
+        }
         Box(
             modifier = Modifier
                 .size(56.dp)
+                .shadow(12.dp, CircleShape, spotColor = MobiusGlow)
                 .clip(CircleShape)
-                .background(Brush.radialGradient(listOf(Color(0xFF7C9CFF), Color(0xFF3D5AFE)))),
+                .background(MobiusGradientBrush),
             contentAlignment = Alignment.Center,
         ) {
-            Text(
-                text = if (working) "..." else "∞", // infinity sign
-                color = Color.White,
-                fontSize = 26.sp,
-                fontWeight = FontWeight.Bold,
+            Image(
+                painter = painterResource(id = R.drawable.ic_launcher_foreground),
+                contentDescription = "MOBIUS",
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(CircleShape),
             )
+            if (working) {
+                CircularProgressIndicator(
+                    color = Color.White,
+                    strokeWidth = 3.dp,
+                    modifier = Modifier.size(56.dp),
+                )
+            }
         }
         if (status != null) {
             Spacer(Modifier.height(4.dp))
             Surface(
                 shape = RoundedCornerShape(12.dp),
-                color = Color(0xEE1B1F2A),
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.93f),
                 modifier = Modifier.widthIn(max = 220.dp),
             ) {
                 Text(
                     text = status,
-                    color = Color.White,
+                    color = MaterialTheme.colorScheme.onSurface,
                     fontSize = 12.sp,
                     maxLines = 3,
                     overflow = TextOverflow.Ellipsis,
@@ -80,13 +131,13 @@ fun BubbleView(
             Spacer(Modifier.height(4.dp))
             Surface(
                 shape = RoundedCornerShape(12.dp),
-                color = Color(0xEE7C1F1F),
+                color = MaterialTheme.colorScheme.error.copy(alpha = 0.9f),
                 modifier = Modifier
                     .widthIn(max = 220.dp)
                     .clickable(onClick = onStopAutoScroll),
             ) {
                 Text(
-                    text = "Stop auto-scroll",
+                    text = strings.inputAutoStop,
                     color = Color.White,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,

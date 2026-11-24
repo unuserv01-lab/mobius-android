@@ -13,7 +13,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.Button
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -69,6 +69,7 @@ private data class PermissionItem(
  */
 @Composable
 fun OnboardingScreen(app: MobiusApp, onDone: () -> Unit) {
+    val strings = LocalStrings.current
     val context = LocalContext.current
     val pm = app.permissions
     val status by rememberPermissionStatus(pm)
@@ -81,42 +82,42 @@ fun OnboardingScreen(app: MobiusApp, onDone: () -> Unit) {
 
     val permissionItems = listOf(
         PermissionItem(
-            "Draw over other apps",
-            "Shows the floating bubble on top of other apps so you can call ${AppConfig.APP_NAME} from anywhere.",
-            "The bubble is hidden. You can still use ${AppConfig.APP_NAME} from the app itself.",
-            status.overlay, "Open settings",
+            strings.obDrawTitle,
+            strings.obDrawWhy,
+            strings.obDrawDenied,
+            status.overlay, strings.obOpenSettings,
         ) { open(pm.overlaySettingsIntent()) },
         PermissionItem(
-            "Accessibility service",
-            "Lets ${AppConfig.APP_NAME} read the screen and tap or type in other apps, only when you ask it to run a task.",
-            "Cross-app tasks are disabled. AI chat still works.",
-            status.accessibility, "Open settings",
+            strings.obAccTitle,
+            strings.obAccWhy,
+            strings.obAccDenied,
+            status.accessibility, strings.obOpenSettings,
         ) { open(pm.accessibilitySettingsIntent()) },
         PermissionItem(
-            "Notification access",
-            "Lets ${AppConfig.APP_NAME} read incoming notifications (for example the last WhatsApp message). They stay in memory for 10 minutes and are never saved or uploaded by themselves.",
-            "Tasks that need a notification (like replying to WhatsApp) are disabled.",
-            status.notificationListener, "Open settings",
+            strings.obNotifTitle,
+            strings.obNotifWhy,
+            strings.obNotifDenied,
+            status.notificationListener, strings.obOpenSettings,
         ) { open(pm.notificationListenerSettingsIntent()) },
         PermissionItem(
-            "Usage access",
-            "Lets ${AppConfig.APP_NAME} know which app is in front, to understand context.",
-            "Context falls back to the time and notifications only.",
-            status.usageStats, "Open settings",
+            strings.obUsageTitle,
+            strings.obUsageWhy,
+            strings.obUsageDenied,
+            status.usageStats, strings.obOpenSettings,
         ) { open(pm.usageAccessSettingsIntent()) },
         PermissionItem(
-            "Notifications",
-            "Shows the small status notice while ${AppConfig.APP_NAME} is running.",
-            "No status notification (the assistant still works).",
-            status.postNotifications, "Allow",
+            strings.obStatusTitle,
+            strings.obStatusWhy,
+            strings.obStatusDenied,
+            status.postNotifications, strings.obAllow,
         ) {
             if (Build.VERSION.SDK_INT >= 33) notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         },
         PermissionItem(
-            "Microphone",
-            "Lets you speak a request into the bubble instead of typing (Android speech recognition, on-device where available).",
-            "Voice input is unavailable; typing still works.",
-            status.microphone, "Allow",
+            strings.obMicTitle,
+            strings.obMicWhy,
+            strings.obMicDenied,
+            status.microphone, strings.obAllow,
         ) { micLauncher.launch(Manifest.permission.RECORD_AUDIO) },
     )
 
@@ -126,53 +127,55 @@ fun OnboardingScreen(app: MobiusApp, onDone: () -> Unit) {
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item {
-            Text(AppConfig.APP_NAME, style = MaterialTheme.typography.headlineMedium)
-            Text(AppConfig.TAGLINE, style = MaterialTheme.typography.bodyMedium)
             Text(
-                "Everything below is opt-in. You stay in control and can revoke any of it at any time.",
+                AppConfig.APP_NAME,
+                style = MaterialTheme.typography.headlineMedium.copy(brush = MobiusGradientBrush),
+            )
+            Text(
+                AppConfig.TAGLINE,
+                style = MaterialTheme.typography.bodyMedium.copy(brush = MobiusGradientBrush),
+            )
+            Text(
+                strings.obIntro,
                 modifier = Modifier.padding(top = 8.dp),
             )
         }
         items(permissionItems) { item -> PermissionCard(item) }
         item {
-            Card(Modifier.fillMaxWidth()) {
+            Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Installed from an APK file?", style = MaterialTheme.typography.titleSmall)
-                    Text(
-                        "On Android 13+, Accessibility and Notification access can be greyed out for apps " +
-                            "installed outside the Play Store. Open App info, tap the three-dot menu and choose " +
-                            "\"Allow restricted settings\", then try again.",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    OutlinedButton(onClick = { open(pm.appDetailsIntent()) }) { Text("Open App info") }
+                    Text(strings.obApkTitle, style = MaterialTheme.typography.titleSmall)
+                    Text(strings.obApkBody, style = MaterialTheme.typography.bodySmall)
+                    OutlinedButton(onClick = { open(pm.appDetailsIntent()) }) { Text(strings.obApkButton) }
                 }
             }
         }
         item {
-            Button(
+            GradientButton(
                 onClick = { scope.launch { pm.setOnboardingDone(true); onDone() } },
                 modifier = Modifier.fillMaxWidth(),
-            ) { Text("Continue") }
+            ) { Text(strings.obContinue) }
         }
     }
 }
 
 @Composable
 private fun PermissionCard(item: PermissionItem) {
-    Card(Modifier.fillMaxWidth()) {
+    val strings = LocalStrings.current
+    Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(item.title, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
                 Text(
-                    if (item.granted) "Granted" else "Not granted",
-                    color = if (item.granted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                    if (item.granted) strings.obGranted else strings.obNotGranted,
+                    color = if (item.granted) MobiusSuccess else MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.labelMedium,
                 )
             }
             Text(item.why, style = MaterialTheme.typography.bodySmall)
             if (!item.granted) {
-                Text("If you skip: ${item.ifDenied}", style = MaterialTheme.typography.bodySmall)
-                Button(onClick = item.onAction) { Text(item.actionLabel) }
+                Text(strings.obSkipPrefix + item.ifDenied, style = MaterialTheme.typography.bodySmall)
+                GradientButton(onClick = item.onAction) { Text(item.actionLabel) }
             }
         }
     }

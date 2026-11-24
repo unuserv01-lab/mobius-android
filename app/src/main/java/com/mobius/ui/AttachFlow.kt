@@ -65,11 +65,16 @@ sealed interface AttachResult {
     data class Failed(val message: String) : AttachResult
 }
 
-suspend fun processPickedFile(context: Context, uri: Uri, app: MobiusApp): AttachResult {
+suspend fun processPickedFile(
+    context: Context,
+    uri: Uri,
+    app: MobiusApp,
+    strings: MobiusStrings,
+): AttachResult {
     val localFilesOn =
         runCatching { app.featureFlags.isEnabled(FeatureFlag.LOCAL_FILES).first() }.getOrDefault(true)
     if (!localFilesOn) {
-        return AttachResult.Failed("Fitur file lokal nonaktif — aktifkan LOCAL_FILES di Pengaturan")
+        return AttachResult.Failed(strings.attachDisabled)
     }
     val alertOn =
         runCatching { app.featureFlags.isEnabled(FeatureFlag.SENSITIVE_ALERT).first() }.getOrDefault(true)
@@ -109,9 +114,9 @@ suspend fun processPickedFile(context: Context, uri: Uri, app: MobiusApp): Attac
             else AttachResult.Ready(file)
         }
     } catch (e: FileExtractionException) {
-        AttachResult.Failed(e.message ?: "Teks tidak dapat diekstrak dari file ini")
+        AttachResult.Failed(e.message ?: strings.attachExtractFailed)
     } catch (_: Exception) {
-        AttachResult.Failed("Teks tidak dapat diekstrak dari file ini")
+        AttachResult.Failed(strings.attachExtractFailed)
     }
 }
 

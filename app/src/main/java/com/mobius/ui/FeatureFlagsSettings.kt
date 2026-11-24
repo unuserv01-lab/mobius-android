@@ -21,38 +21,43 @@ import kotlinx.coroutines.launch
 /**
  * v6 Step 0 — one Switch per feature flag. All flags default ON.
  * OFF means "v5 behavior exactly": the new v6 behavior behind that flag is skipped.
+ *
+ * v7: labels/descriptions come from the strings table (ID + EN), so the
+ * section follows the selected language like every other screen.
  */
-private val FLAG_LABELS: List<Triple<FeatureFlag, String, String>> = listOf(
-    Triple(FeatureFlag.PLANNING_LOOP, "Planning loop", "Agent merencanakan langkah sendiri sebelum bertindak."),
-    Triple(FeatureFlag.ORCHESTRATION, "Orchestration", "Orkestrasi multi-langkah antar agent dan skill."),
-    Triple(FeatureFlag.CODE_AGENT, "Code agent", "Agent yang bisa membaca dan menulis kode."),
-    Triple(FeatureFlag.WA_WATCHER, "WA watcher", "Memantau pesan WhatsApp masuk secara otomatis."),
-    Triple(FeatureFlag.PARALLEL_WORKERS, "Parallel workers", "Beberapa worker berjalan bersamaan."),
-    Triple(FeatureFlag.VOICE_OUTPUT, "Voice output", "Jawaban dibacakan dengan suara."),
-    Triple(FeatureFlag.AUTO_SCROLL, "Auto scroll", "Layar di-scroll otomatis saat membaca konten panjang."),
-    Triple(FeatureFlag.TOKOPEDIA_SKILL, "Tokopedia skill", "Skill pencarian harga di Tokopedia."),
-    Triple(FeatureFlag.MEMORY_V2, "Memory v2", "Penyimpanan memori generasi baru."),
-    Triple(FeatureFlag.MULTI_ENGINE, "Multi engine", "Beberapa engine AI dipakai bersamaan."),
-    Triple(FeatureFlag.LAPTOP_BRIDGE, "Laptop bridge", "Terhubung ke laptop sebagai mesin tambahan."),
-    Triple(FeatureFlag.REMOTE_GATEWAY, "Remote gateway", "Akses jarak jauh lewat gateway."),
-    Triple(FeatureFlag.NANO_TRIAGE, "Nano triage", "Gemini Nano memilah tugas sebelum dikirim ke cloud."),
-    Triple(FeatureFlag.CHAT_HISTORY, "Riwayat chat", "Percakapan Home + bubble tersimpan sampai kadaluarsa yang dipilih di Settings."),
-    Triple(FeatureFlag.LOCAL_FILES, "File lokal", "Lampirkan file dari HP sebagai konteks tugas (pilih manual, tidak pernah scan storage)."),
-    Triple(FeatureFlag.SENSITIVE_ALERT, "Peringatan data sensitif", "Pindai file/foto yang dilampirkan secara lokal sebelum dipakai; beri peringatan bila ada data sensitif."),
+private fun flagLabels(strings: MobiusStrings): List<Triple<FeatureFlag, String, String>> = listOf(
+    Triple(FeatureFlag.PLANNING_LOOP, strings.flagPlanningLoop, strings.flagPlanningLoopDesc),
+    Triple(FeatureFlag.ORCHESTRATION, strings.flagOrchestration, strings.flagOrchestrationDesc),
+    Triple(FeatureFlag.CODE_AGENT, strings.flagCodeAgent, strings.flagCodeAgentDesc),
+    Triple(FeatureFlag.WA_WATCHER, strings.flagWaWatcher, strings.flagWaWatcherDesc),
+    Triple(FeatureFlag.PARALLEL_WORKERS, strings.flagParallel, strings.flagParallelDesc),
+    Triple(FeatureFlag.VOICE_OUTPUT, strings.flagVoice, strings.flagVoiceDesc),
+    Triple(FeatureFlag.AUTO_SCROLL, strings.flagAutoScroll, strings.flagAutoScrollDesc),
+    Triple(FeatureFlag.TOKOPEDIA_SKILL, strings.flagTokopedia, strings.flagTokopediaDesc),
+    Triple(FeatureFlag.MEMORY_V2, strings.flagMemory, strings.flagMemoryDesc),
+    Triple(FeatureFlag.MULTI_ENGINE, strings.flagMultiEngine, strings.flagMultiEngineDesc),
+    Triple(FeatureFlag.LAPTOP_BRIDGE, strings.flagBridge, strings.flagBridgeDesc),
+    Triple(FeatureFlag.REMOTE_GATEWAY, strings.flagGateway, strings.flagGatewayDesc),
+    Triple(FeatureFlag.NANO_TRIAGE, strings.flagTriage, strings.flagTriageDesc),
+    Triple(FeatureFlag.CHAT_HISTORY, strings.flagChatHistory, strings.flagChatHistoryDesc),
+    Triple(FeatureFlag.LOCAL_FILES, strings.flagLocalFiles, strings.flagLocalFilesDesc),
+    Triple(FeatureFlag.SENSITIVE_ALERT, strings.flagSensitive, strings.flagSensitiveDesc),
 )
 
 @Composable
 fun FeatureFlagsSection(app: MobiusApp) {
+    val strings = LocalStrings.current
     val flags = app.featureFlags
     val scope = rememberCoroutineScope()
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("Fitur v6 (feature flags)", style = MaterialTheme.typography.titleMedium)
         Text(
-            "Semua ON secara default. Matikan satu fitur untuk kembali ke perilaku v5 untuk fitur itu.",
-            style = MaterialTheme.typography.bodySmall,
+            strings.flagsTitle,
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.tertiary,
         )
-        FLAG_LABELS.forEach { (flag, label, description) ->
+        Text(strings.flagsDesc, style = MaterialTheme.typography.bodySmall)
+        flagLabels(strings).forEach { (flag, label, description) ->
             val enabled by flags.isEnabled(flag).collectAsState(initial = true)
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {

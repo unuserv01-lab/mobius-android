@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -37,6 +38,7 @@ private fun fmt(ms: Long) = timeFormat.format(Date(ms))
  */
 @Composable
 fun HistoryScreen(app: MobiusApp) {
+    val strings = LocalStrings.current
     val memory by app.memoryStore.observeMemory().collectAsState(initial = emptyList())
     val routing by app.memoryStore.observeRoutingLog().collectAsState(initial = emptyList())
     val trail by app.memoryStore.observeTaskTrail().collectAsState(initial = emptyList())
@@ -52,15 +54,21 @@ fun HistoryScreen(app: MobiusApp) {
     ) {
         // (v5) Skill task step trail: latest tasks first, steps marked ✓/✗ + duration,
         // plus the plan decision and every ActionGate decision.
-        item { Text("Task step trail", style = MaterialTheme.typography.titleLarge) }
+        item {
+            Text(
+                strings.histTrailTitle,
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.tertiary,
+            )
+        }
         val trailGroups = trail.groupBy { it.taskId }.entries.take(5)
         if (trailGroups.isEmpty()) {
-            item { Text("No skill tasks yet.", style = MaterialTheme.typography.bodySmall) }
+            item { Text(strings.histTrailEmpty, style = MaterialTheme.typography.bodySmall) }
         }
         for ((taskId, rows) in trailGroups) {
             item {
-                Card(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         val head = rows.first()
                         Text(
                             "${head.skillName} — \"${head.userText.take(40)}\"",
@@ -73,7 +81,9 @@ fun HistoryScreen(app: MobiusApp) {
                         for (row in rows.sortedBy { it.id }) {
                             when (row.tool) {
                                 "plan" -> Text(
-                                    if (row.success) "Rencana: disetujui" else "Rencana: dibatalkan",
+                                    if (row.success) strings.histPlanApproved else strings.histPlanCancelled,
+                                    color = if (row.success) MobiusSuccess
+                                        else MaterialTheme.colorScheme.error,
                                     style = MaterialTheme.typography.bodyMedium,
                                 )
                                 "gate" -> Text(
@@ -85,6 +95,8 @@ fun HistoryScreen(app: MobiusApp) {
                                 else -> Text(
                                     "${if (row.success) "✓" else "✗"} ${row.stepIndex + 1}. ${row.tool} — " +
                                         "${row.message.take(120)} (${row.durationMs}ms)",
+                                    color = if (row.success) MobiusSuccess
+                                        else MaterialTheme.colorScheme.error,
                                     style = MaterialTheme.typography.bodySmall,
                                 )
                             }
@@ -94,15 +106,22 @@ fun HistoryScreen(app: MobiusApp) {
             }
         }
 
-        item { Text("AI routing log", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(top = 16.dp)) }
+        item {
+            Text(
+                strings.histRoutingTitle,
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.tertiary,
+                modifier = Modifier.padding(top = 16.dp),
+            )
+        }
         if (routing.isEmpty()) {
-            item { Text("No AI calls yet.", style = MaterialTheme.typography.bodySmall) }
+            item { Text(strings.histRoutingEmpty, style = MaterialTheme.typography.bodySmall) }
         }
         items(routing, key = { "log-${it.id}" }) { entry ->
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(12.dp)) {
+            Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+                Column(Modifier.padding(16.dp)) {
                     val color = when (entry.model) {
-                        AIRouter.MODEL_CLOUD -> MaterialTheme.colorScheme.tertiary
+                        AIRouter.MODEL_CLOUD -> MaterialTheme.colorScheme.secondary
                         AIRouter.MODEL_BLOCKED -> MaterialTheme.colorScheme.error
                         else -> MaterialTheme.colorScheme.primary
                     }
@@ -113,12 +132,19 @@ fun HistoryScreen(app: MobiusApp) {
             }
         }
 
-        item { Text("Past tasks and memory", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(top = 16.dp)) }
+        item {
+            Text(
+                strings.histMemoryTitle,
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.tertiary,
+                modifier = Modifier.padding(top = 16.dp),
+            )
+        }
         if (memory.isEmpty()) {
-            item { Text("Nothing stored.", style = MaterialTheme.typography.bodySmall) }
+            item { Text(strings.histMemoryEmpty, style = MaterialTheme.typography.bodySmall) }
         }
         items(memory, key = { "mem-${it.id}" }) { entry ->
-            Card(Modifier.fillMaxWidth()) {
+            Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
                 Row(Modifier.padding(start = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f).padding(vertical = 12.dp)) {
                         Text(entry.content, style = MaterialTheme.typography.bodyMedium)
@@ -127,7 +153,9 @@ fun HistoryScreen(app: MobiusApp) {
                             style = MaterialTheme.typography.labelSmall,
                         )
                     }
-                    TextButton(onClick = { scope.launch { app.memoryStore.delete(entry.id) } }) { Text("Delete") }
+                    TextButton(onClick = { scope.launch { app.memoryStore.delete(entry.id) } }) {
+                        Text(strings.histDelete)
+                    }
                 }
             }
         }
