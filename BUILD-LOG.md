@@ -2028,3 +2028,558 @@ Tidak ada APK yang ditulis ke `~/workspace/your_files/`; tidak ada push GitHub.
   workstream lain.
 - ChatHistoryView di dalam panel bubble: panel punya tinggi WRAP_CONTENT —
   list 320dp + input bisa membuat panel tinggi; belum terlihat di layar kecil.
+
+---
+
+## v7 — UI PASS: palette + language (ID/EN) + bubble logo DNA + unread badge (24 Nov 2026, ~14:20 WIB)
+
+**Perintah Tuan:** perbaiki UI dulu sebelum file dikirim lagi; "pakek wallet dan tampilan
+yang lebih menarik" + "Pallet"; lalu 3 penambahan: (1) bubble WAJIB ikut DNA warna logo
+(bukan biru polos + glyph ∞), (2) pemilih bahasa Indonesia + Inggris, (3) badge
+balasan-belum-dibaca di atas bubble. **UI ONLY** — tidak ada perubahan perilaku, logika,
+fitur, string (kecuali bahasa, yang memang diperintahkan), atau permission; semua fitur
+v6 dan flag tetap apa adanya. **Tidak ada push ke GitHub** (tidak ada perintah push v7).
+
+### Palet (dari logo MOBIUS — loop ungu-biru menyala di atas gelap)
+
+- Background `#04000F` (near-black violet); surface `#17122E`; surface variant `#221A3E`
+- Primary `#7C4DFF` (ungu); secondary `#4D7CFE` (biru); accent/glow `#B388FF`
+- Teks: primary `#F2EDFF` (lavender-white), secondary/muted `#B9B3D6`
+- Semantik (dark-tuned, makna dipertahankan): success `#66BB6A`, error `#EF5350`,
+  warning `#FFCA28`
+- Gradien logo (dipakai untuk judul aplikasi, bubble, dan tombol primer):
+  linear `#1A73E8 → #4D7CFE → #7C4DFF` (`MobiusGradientBrush` di MainActivity.kt)
+
+### Yang berubah per layar
+
+- **MobiusTheme (`ui/MainActivity.kt`):** `darkColorScheme` penuh dari palet di atas
+  (primary/secondary/tertiary + container, background, surface + container level,
+  error + container, outline/outlineVariant). `MobiusSuccess` / `MobiusWarning` /
+  `MobiusGradientBrush` / `MobiusGlow` sebagai top-level val. `GradientButton`
+  (background gradien logo, label putih; state disabled = gradien ungu redup).
+- **Home:** nama MOBIUS + tagline teks gradien (`TextStyle.copy(brush = ...)`); semua
+  Card `RoundedCornerShape(16.dp)`; spacing konsisten 16dp; input field bentuk 16dp +
+  border primary saat fokus; tombol Run + "Nyalakan bubble" jadi GradientButton;
+  hasil tugas diwarnai (sukses = hijau, gagal = error, netral saat berjalan);
+  CapabilityRow "aktif/nonaktif" hijau/merah. Dialog konfirmasi (kirim/plan/langkah/
+  file sensitif): tombol utama gradien, tombol batal muted (onSurfaceVariant).
+- **History:** header seksi ("Jejak langkah tugas", "Log routing AI", "Tugas lalu dan
+  memori") warna accent; label model routing: cloud = secondary biru (SEBELUMNYA
+  tertiary/oranye), blocked = error, on-device = primary; langkah trail ✓ hijau /
+  ✗ merah; keputusan plan disetujui hijau / dibatalkan merah; card 16dp.
+- **Settings:** semua header seksi warna accent; judul "Pengaturan" gradien; Switch
+  pakai primary dari tema (tidak ada kode khusus); semua seksi dipertahankan
+  (cloud AI, konfirmasi, TTL, Nano, feature flags, watcher rules, remote gateway,
+  data). "Download Nano" jadi GradientButton.
+- **Feature flags / Watcher / Gateway:** header accent; tombol primer ("Kirim",
+  "Tambah aturan", "Simpan", "Kirim tugas tes") jadi GradientButton.
+- **Onboarding:** judul + tagline gradien; card 16dp; tombol aksi per izin + "Lanjutkan"
+  jadi GradientButton; status "Diberikan" hijau (sebelumnya primary).
+- **Bubble chip (logo DNA):** BUKAN lagi lingkaran biru + glyph "∞". Chip 56dp:
+  background gradien logo + glow accent (`shadow` 12dp, spotColor `#B388FF`) +
+  gambar logo asli (`R.drawable.ic_launcher_foreground`, tile logo 432×432) ukuran
+  48dp di-clip melingkar di tengah — cincin gradien 4dp terlihat di sekelilingnya.
+  Saat bekerja, cincin progress putih berputar DI ATAS logo (bukan teks "...").
+  Status chip pakai surface tema (alpha 0.93), teks onSurface; tombol Stop
+  auto-scroll pakai error tema.
+- **Panel bubble:** judul gradien; tombol "Tutup"/"Batal" muted; tombol primer
+  ("Jalankan", "Kirim", "Lanjutkan") GradientButton; input field 16dp + border
+  primary; panel tetap surface tema 20dp.
+- **Bottom navigation:** glyph teks ("⌂", "⧖", "⚙") diganti ikon Material asli
+  (Home, History, Settings) yang digambar dari path data Material kanonik via
+  `ImageVector.Builder` + `PathParser` — TANPA dependensi baru, karena
+  `material-icons-core` hanya dependensi *runtime* material3 sehingga
+  `Icons.Filled.*` TIDAK bisa dikompilasi. Ketiga string path divalidasi sebagai
+  SVG path data sebelum dipakai. Label tab tetap ada.
+- **Tipografi:** font sistem saja (tidak ada unduhan font); headline untuk judul,
+  titleMedium untuk judul card/seksi, bodyMedium/bodySmall untuk konten.
+
+### Bahasa / Language (Indonesia + Inggris) — MENGOVERRIDE batasan "string tetap Inggris"
+
+- **Pemilih di Settings:** seksi "Bahasa / Language" (di atas Cloud AI) dengan dua
+  FilterChip: "Bahasa Indonesia" / "English". **Default: Bahasa Indonesia.**
+- **Implementasi (dipilih karena paling tidak invasif + terbukti bekerja di Service):
+  tabel string terpusat, BUKAN Android string resources.** File baru
+  `ui/MobiusStrings.kt`: `data class MobiusStrings` (~170 field, dua instance
+  `StringsId` / `StringsEn` — compiler memaksa keduanya lengkap), `LocalStrings`
+  (CompositionLocal), `LanguageManager` (DataStore `"app_language"`, key
+  `"language"`, pola sama seperti feature flags), `stringsFor()`.
+- **Kenapa bukan string resources + per-app locale:** butuh AppCompat (dependensi
+  baru) untuk `setApplicationLocales`, dan locale Service overlay harus diurus
+  terpisah — tabel + CompositionLocal bekerja dengan SATU jalur kode untuk kedua
+  root komposisi (Activity + BubbleService), dan perubahan bahasa langsung
+  recompose keduanya **tanpa restart, tanpa reinstall**.
+- **Cakupan:** SEMUA string statis UI — Home, History, Settings, bubble + panel,
+  semua dialog (kirim/plan/langkah/file sensitif), feature flags (16 label +
+  deskripsi), watcher rules, remote gateway, onboarding, notifikasi foreground
+  Service, pesan attach flow. Proper noun / nama paket / nama model (Gemini, Nano)
+  dan tagline "Your Intelligence. Everywhere. Owned by You." TIDAK diterjemahkan.
+- **Batas yang jujur (didokumentasikan di MobiusStrings.kt):** pesan DINAMIS yang
+  dihasilkan core/AI (status tugas, hasil/outcome, alasan routing log, nama skill,
+  teks langkah, label status Nano dari SDK) tetap dalam bahasa yang dihasilkan
+  core — menerjemahkannya berarti menyentuh Orchestrator/AIRouter/agent (di luar
+  cakupan UI). Notifikasi foreground mengikuti bahasa saat Service start (dan
+  di-issue ulang saat bahasa berubah). Nama channel notifikasi ("MOBIUS assistant")
+  sengaja tidak diubah (mengubahnya membuat channel duplikat di Android).
+- Satu-satunya sentuhan ke file non-UI untuk fitur ini: `BubbleService.kt`
+  (membaca DataStore yang sama + menyediakan `LocalStrings` di kedua host Compose)
+  dan `AttachFlow.kt` (`processPickedFile` menerima `strings` — pesan error
+  "fitur nonaktif" / "tidak dapat diekstrak" mengikuti bahasa). Blok DATA
+  `buildFileDataBlock` TIDAK diterjemahkan (label anti-prompt-injection untuk LLM).
+
+### Badge balasan-belum-dibaca (di atas bubble)
+
+- State lokal di `BubbleService` saja (`unreadCount`, `mutableStateOf`, TIDAK
+  dipersist — hilang saat Service mati). TIDAK ada perubahan Orchestrator/agent/
+  Firebase.
+- **Aturan:** `showOutcome` menaikkan count +1 HANYA untuk outcome yang datang saat
+  panel tertutup (`panelState is Hidden`). Outcome panjang yang membuka panel
+  Result sendiri TIDAK dihitung (user langsung melihatnya); outcome yang datang
+  saat panel sudah terbuka juga tidak dihitung. `openPanel` (apapun pemicunya —
+  ketuk bubble, dialog konfirmasi, Result) me-reset count ke 0.
+- **Tampilan (`BubbleView`):** lingkaran kecil accent `#B388FF` (tertiary tema)
+  DI ATAS chip, rata kanan, angka putih-gelap bold 12sp; "9+" bila count > 9.
+  Ketukan pada badge = ketukan pada bubble (satu overlay root yang sama) →
+  membuka panel Input dan me-reset count.
+- **Catatan:** outcome pendek tetap tampil di status chip 5 detik seperti biasa;
+  badge adalah penanda persisten setelah chip hilang.
+
+### Build & verifikasi
+
+- Perintah standar (biner Gradle cache langsung — `./gradlew` tidak dipakai):
+  `GRADLE_USER_HOME=/home/hatch/.gradle`, `JAVA_HOME=~/workspace/rea-env/providers/jdk-21.0.13.1+2`,
+  `JAVA_TOOL_OPTIONS=-Djava.net.preferIPv4Stack=true`, `ANDROID_HOME=~/android-sdk`,
+  `gradle-8.9/bin/gradle assembleDebug` dari `~/workspace/mobius-android/mobius/`.
+- **Percobaan 1: GAGAL kompilasi** — `Unresolved reference 'preferencesDataStore'`
+  di MobiusStrings.kt: import salah (`androidx.datastore.preferences.core...`,
+  yang tidak ada); yang benar `androidx.datastore.preferences.preferencesDataStore`
+  (sama seperti WatcherRules/PermissionManager/FeatureFlags). Diperbaiki, tanpa
+  perubahan lain.
+- **Percobaan 2: BERHASIL, EXIT 0, 1m 25s** (8 executed, 32 up-to-date). Semua
+  warning adalah warning lama yang tidak terkait (AgentFactory `!!`, deprecasi
+  OnDeviceAI, `SOFT_INPUT_ADJUST_RESIZE`, RemoteGateway, `LocalLifecycleOwner`) —
+  tidak ada warning dari kode v7.
+- **APK:** `~/workspace/your_files/mobius-debug-v7.apk`, **61.383.409 byte**
+  (v6: 61.334.257 — naik 49.152 byte, hanya kode + path ikon; gambar logo sudah
+  ada di APK sejak v4 sebagai launcher icon), SHA-256
+  `3fcf4c04436c10a7416f3f77ed3c5f0af367b17595bcf791fb6c247877fa1346`.
+- **aapt2 badging:** package `com.mobius`, versionName `0.1.0`, label `MOBIUS`;
+  permission sama seperti v6 (INTERNET, SYSTEM_ALERT_WINDOW, FOREGROUND_SERVICE,
+  FOREGROUND_SERVICE_SPECIAL_USE, POST_NOTIFICATIONS, **RECORD_AUDIO**,
+  PACKAGE_USAGE_STATS, RECEIVE_BOOT_COMPLETED, BIND_SERVICE AICore,
+  ACCESS_NETWORK_STATE, WAKE_LOCK) — **tidak ada permission baru**.
+- **Dikonfirmasi di dalam APK:** `res/drawable-xxxhdpi-v4/ic_launcher_foreground.png`
+  (144.617 byte) ada — `painterResource` bubble akan resolve saat runtime.
+- **File yang diubah (13):** `ui/MainActivity.kt` (tema + GradientButton + ikon nav
+  + Home + dialog), `ui/MobiusStrings.kt` (BARU), `ui/HistoryScreen.kt`,
+  `ui/SettingsScreen.kt`, `ui/FeatureFlagsSettings.kt`, `ui/WatcherRulesSettings.kt`,
+  `ui/RemoteGatewaySettings.kt`, `ui/ChatHistoryView.kt`, `ui/OnboardingScreen.kt`,
+  `ui/AttachFlow.kt` (parameter strings), `bubble/BubbleView.kt` (logo + badge),
+  `bubble/BubbleInput.kt`, `bubble/BubbleService.kt` (bahasa + badge).
+  TIDAK disentuh: ActionGate, SkillRunner, Orchestrator, PlanningAgent, CodeAgent,
+  WatcherEngine, RemoteGateway, MemoryStore, dan semua file non-UI lain.
+
+### Yang TIDAK bisa diverifikasi di VM (Tuan yang cek di HP)
+
+- **Tampilan visual:** tidak ada screenshot di VM. Yang perlu Tuan lihat:
+  palet ungu-biru di semua layar, teks gradien judul, tombol gradien, ikon nav
+  (Home/Riwayat/Pengaturan), bubble = logo (bukan ∞ biru) + glow, badge "9+"
+  di atas bubble, dan bahasa Indonesia sebagai default.
+- **Risiko visual yang dicatat:** tile logo 432×432 berisi loop + teks "MOBIUS"
+  di bawahnya; di chip 48dp teksnya sangat kecil (hanya jadi bagian logo).
+  Kalau di HP terlihat berantakan, opsi berikutnya: zoom/crop gambar ke loop
+  saja (tanpa teks) — tinggal bilang.
+- **Yang belum diuji di perangkat (sama seperti v6):** migrasi Room 2→3 (v6),
+  planning loop, watcher, CodeAgent, gateway round trip, TTS, attach + alert.
+  Instal v7 sebagai UPDATE di atas v6 (jangan uninstall — selain menjaga
+  toggle "Allow cloud AI", juga menjaga bahasa yang sudah dipilih).
+- **Catatan badge:** count hilang saat BubbleService mati/restart (state lokal,
+  bukan persist) — itu desain, bukan bug.
+
+## v7.1 — HOTFIX: cloud timeout 30 dtk + pesan gate cloud + status bubble tidak boleh macet (24 Nov 2026, ~15:10 WIB)
+
+**Pemicu (terbukti di HP Tuan, v7 fresh install):**
+1. History mencatat `router failed: "hy"` + `Belum ada panggilan AI` — router melempar
+   SEBELUM ada panggilan AI. Di Xiaomi Nano tidak tersedia, jadi satu-satunya
+   kegagalan pra-panggilan adalah gate cloud: fresh install me-reset
+   "Allow cloud AI" ke OFF (default false).
+2. Bubble macet di "Understanding your request..." — panggilan cloud sedang
+   jalan dan tidak pernah kembali. `CloudAI.generate()` memanggil
+   `model.generateContent(prompt)` TANPA timeout, sementara koneksi kerja Tuan
+   ~0,1 KB/d: panggilan menggantung selamanya, bukan gagal cepat.
+
+**Perubahan (hanya ini, tidak ada yang lain):**
+- **(a) Timeout cloud 30 detik** — `ai/CloudAI.kt`: `generateContent` dibungkus
+  `withTimeout(30_000)`. Timeout diubah jadi `CloudTimeoutException` (kegagalan
+  NORMAL, bukan pembatalan coroutine) dengan pesan persis:
+  "Cloud tidak merespons dalam 30 detik (koneksi lambat). Coba lagi saat sinyal
+  lebih baik." Pesan ini sampai ke user apa adanya — `Orchestrator` menangkap
+  `CloudTimeoutException` secara khusus di tiga tempat (routing intent,
+  `runAgent`, `executeTask` — yang terakhir menutupi jalur tanpa catch sendiri,
+  mis. `Orchestration.decompose`) dan mengembalikan `TaskOutcome(false,
+  e.message)` TANPA prefix "Something went wrong:".
+- **(b) Pesan gate cloud (Indonesia)** — `ai/AIRouter.kt`: `CloudRequiredException`
+  sekarang membawa pesan tetap persis:
+  "Butuh cloud AI tapi 'Izinkan AI cloud' masih OFF. Nyalakan di Pengaturan, lalu
+  coba lagi. (Nano tidak tersedia di HP ini.)"
+  Kedua catch yang sudah ada di `Orchestrator` memakai `e.message` apa adanya,
+  jadi pesan ini muncul sebagai outcome di bubble + Home (bukan cuma log).
+  `reason` tetap disimpan di exception untuk routing log/debug, tidak ditampilkan.
+  Pesan ini hanya bisa muncul saat Nano memang tidak tersedia/gagal DAN cloud OFF
+  (kalau Nano tersedia dan tugas berat tapi cloud OFF, kode tetap turun ke on-device).
+- **(c) Status bubble selalu diganti outcome** — audit jalur `BubbleService.onSubmit`:
+  satu-satunya jalur yang bisa membuat "Understanding your request..." macet adalah
+  `submit()` yang tidak pernah kembali (panggilan cloud tanpa timeout) — ditutup
+  oleh (a). Pengaman tambahan:
+  - `onSubmit` sekarang menangkap `CancellationException` secara eksplisit dan
+    tetap memanggil `showOutcome` (status diganti pesan gagal) — tidak di-rethrow
+    dengan sengaja: job ini fire-and-forget di bawah SupervisorJob, dan menampilkan
+    outcome lebih penting daripada propagasi pembatalan. `showOutcome` mengosongkan
+    teks status SEBELUM membuka panel Result, jadi status terganti walau panel
+    tidak bisa dibuka.
+  - Worker pool `Orchestrator`: `throw e` setelah `completeExceptionally(e)` DIHAPUS.
+    Pembatalan sudah disampaikan ke pemanggil lewat deferred; me-rethrow hanya
+    membunuh worker itu dan membuat SEMUA tugas berikutnya macet selamanya
+    (bubble macet di "Understanding..." untuk semua tugas sesudahnya). Scope worker
+    yang benar-benar dibatalkan tetap mati di `receive` berikutnya — perilaku itu
+    tidak berubah.
+- **Tidak disentuh:** ActionGate, SkillRunner, PlanningAgent, CodeAgent,
+  WatcherEngine, RemoteGateway, MemoryStore, palet/bahasa, izin, dependensi.
+
+**Build:** `assembleDebug` BERHASIL 2m 17s, EXIT 0 (biner Gradle cache, BUKAN
+./gradlew; 7 executed, 33 up-to-date). Satu-satunya warning: deprecasi
+`SOFT_INPUT_ADJUST_RESIZE` yang sudah ada sejak lama di BubbleService.kt.
+**APK:** `~/workspace/your_files/mobius-debug-v7.1.apk`, **61.451.739 byte**,
+SHA-256 `9b74f5de891e45da0560b171d15a6bc224a171c5cdef369dc14ff8f38ee1eee2`,
+aapt2 OK (package `com.mobius`, versionName 0.1.0, label MOBIUS). Izin IDENTIK
+dengan v7 (12 izin, termasuk RECORD_AUDIO) — tidak ada izin baru.
+**Tanda tangan (WAJIB, keystore permanen):** `mobius-release.keystore`, alias
+`mobius` — apksigner verify: sertifikat SHA-256
+`fc30510abaa8848d5ce040b2a04049e95c5648630b6e755f1ab7de4908140e6e` (sama dengan
+kunci permanen v7 yang sudah di-resign). **Instal v7.1 sebagai UPDATE di atas v7
+(jangan uninstall)** — kunci sama, jadi update langsung bisa.
+**Tidak ada push GitHub** (tidak ada perintah push v7.1).
+
+**Yang belum diuji di perangkat:** timeout 30 detik di koneksi lambat sungguhan,
+pesan gate saat toggle OFF, dan status bubble setelah kegagalan — ketiganya hanya
+bisa dibuktikan di HP Tuan (VM tidak punya koneksi 0,1 KB/d dan tidak bisa
+menjalankan aplikasi). Yang bisa diverifikasi di sini: kompilasi bersih, pesan
+persis ada di kode, dan semua jalur catch menutupi setiap pemanggil
+`aiRouter.generate` (TaskRouter, AgentFactory, CodeAgent, Orchestration,
+PlanningAgent, runSkill-summary).
+
+## v7.2 — OpenRouter fallback saat Gemini cloud gagal (24 Nov 2026, ~15:14 WIB)
+
+**Perintah Tuan:** "sementara alihkan ke openrouter ketika Gemini cloud gk mau respon"
+(24 Nov 15:13 WIB). Latar: Gemini cloud tidak merespons — dites langsung dari VM,
+panggilan ke gemini-3.8-flash 90 detik tanpa balasan; di HP Tuan mati "Deadline
+expired" di sinyal 0,1 KB/d. v7.2 menambah jalur cadangan, BUKAN mengganti Gemini.
+
+### Model gratis yang dipilih (dari daftar LIVE)
+- Dicek 24 Nov 2026 ~15:14 WIB: `curl https://openrouter.ai/api/v1/models` →
+  473 model total, **12 model `:free`**.
+- Default: **`google/gemma-4-26b-a4b-it:free`** (`AppConfig.DEFAULT_OPENROUTER_MODEL`).
+  Alasan: Gemma 4 Google, instruct-tuned (cocok untuk prompt klasifikasi/JSON pendek
+  yang dikirim MOBIUS), NON-reasoning (model reasoning `:free` menghabiskan seluruh
+  budget token untuk reasoning lalu mengembalikan konten null — jebakan yang sudah
+  terverifikasi, AGENTS.md), ukuran menengah 26B (latensi wajar di free tier).
+- Ditolak: model reasoning (ling-3.2-flash, nemotron-3-nano-omni reasoning), preview
+  (ernie-5.5-flash-preview, dots-3-note-preview), vendor tak dikenal (particle-1,
+  flint-v1.0, lfm-3-1.7b), MoE 550B ultra (risiko latensi free tier), varian VL-only.
+- Model adalah field di Settings (default di atas) — BUKAN satu-satunya opsi yang
+  di-hardcode — karena model gratis berubah-ubah. Cek ulang daftar live kalau
+  model ini berhenti bekerja.
+
+### Rantai fallback (AIRouter.generate, tidak ada yang lain berubah)
+1. Nano dulu (tidak berubah).
+2. Gemini cloud, timeout 30 detik v7.1 (tidak berubah).
+3. Kalau Gemini GAGAL (timeout atau error apa pun): cek kunci OpenRouter di DataStore.
+   - Tidak ada kunci → perilaku persis v7.1 (exception Gemini diteruskan, pesan
+     outcome v7.1 tidak berubah, tidak ada percobaan OpenRouter, tidak ada crash).
+   - Ada kunci → coba OpenRouter SEKALI (30 detik, model dari Settings) →
+     sukses: hasil dicatat di routing log dengan engine `openrouter` (alasan
+     "Gemini failed (...) -> OpenRouter <model>") → gagal juga: percobaan dicatat
+     di routing log (`openrouter`, alasan gagal) lalu exception ASLI Gemini
+     diteruskan — pesan outcome tetap pesan v7.1, tidak ada pesan gabungan baru.
+
+### File baru / diubah
+- BARU `ai/OpenRouterAI.kt`: POST https://openrouter.ai/api/v1/chat/completions,
+  body `{"model": ..., "messages": [{"role": "user", "content": prompt}]}`, header
+  `Authorization: Bearer <key>`, `HTTP-Referer: https://mobius.local`,
+  `X-Title: MOBIUS`; timeout 30 detik (sama seperti v7.1); parse
+  `choices[0].message.content`. HttpURLConnection + org.json saja (pola yang sama
+  dengan RemoteGateway) — TIDAK ada dependensi baru. Kunci TIDAK PERNAH di-log
+  (pesan error hanya berisi status HTTP / alasan singkat).
+- `ai/AIRouter.kt`: parameter konstruktor `openRouter: OpenRouterAI`; rantai fallback
+  di langkah 4; konstanta `MODEL_OPENROUTER = "openrouter"`.
+- `MobiusApp.kt`: `AIRouter(..., OpenRouterAI())`.
+- `core/PermissionManager.kt`: kunci DataStore `openrouter_api_key` +
+  `openrouter_model` (DataStore `mobius_prefs`, sama seperti toggle cloud AI);
+  Flow + getter/setter. Kunci hanya tersimpan di HP.
+- `core/AppConfig.kt`: `DEFAULT_OPENROUTER_MODEL` + alasan pemilihan.
+- `ui/MobiusStrings.kt`: 7 string baru (ID + EN, compiler memaksa keduanya lengkap).
+- BARU `ui/OpenRouterSettings.kt`: seksi "Model cadangan (OpenRouter)" — field kunci
+  (masked, PasswordVisualTransformation), field model, status "Kunci tersimpan" /
+  "Belum ada kunci — fallback tidak aktif", catatan cara dapat kunci gratis, tombol
+  Simpan (pola draft + LaunchedEffect yang sama seperti RemoteGatewaySection).
+- `ui/SettingsScreen.kt`: seksi dipasang setelah seksi Cloud AI gate.
+- TIDAK disentuh: jalur Nano, pesan timeout/gate v7.1, palet/bahasa, ActionGate,
+  SkillRunner, PlanningAgent, CodeAgent, WatcherEngine, RemoteGateway, MemoryStore,
+  izin, dependensi.
+
+### Build & verifikasi
+- Perintah standar (biner Gradle cache langsung — `./gradlew` tidak dipakai):
+  `GRADLE_USER_HOME=/home/hatch/.gradle`, `JAVA_HOME=~/workspace/rea-env/providers/jdk-21.0.13.1+2`,
+  `JAVA_TOOL_OPTIONS=-Djava.net.preferIPv4Stack=true`, `ANDROID_HOME=~/android-sdk`,
+  `gradle-8.9/bin/gradle assembleDebug` dari `~/workspace/mobius-android/mobius/`.
+- **BERHASIL, EXIT 0, 1m 9s** (8 executed, 32 up-to-date). Warning hanya warning lama
+  yang tidak terkait (AgentFactory `!!`, deprecasi `SOFT_INPUT_ADJUST_RESIZE`,
+  `LocalLifecycleOwner`) — tidak ada warning dari kode v7.2.
+- **APK:** `~/workspace/your_files/mobius-debug-v7.2.apk`, **61.668.827 byte**,
+  SHA-256 `ccbc9e009ad6d81512aba581c85e80b7969f36ec98819c99d552257e768acab8`.
+- aapt2: package `com.mobius`, versionName `0.1.0`, label `MOBIUS`; **12 izin — identik
+  dengan v7/v7.1 (termasuk RECORD_AUDIO), tidak ada izin baru.**
+- **Tanda tangan (WAJIB, keystore permanen):** `mobius-release.keystore`, alias
+  `mobius` — apksigner verify: sertifikat SHA-256
+  `fc30510abaa8848d5ce040b2a04049e95c5648630b6e755f1ab7de4908140e6e` (sama dengan
+  kunci permanen). **Instal v7.2 sebagai UPDATE di atas v7.1 (jangan uninstall)**
+  — kunci sama, jadi update langsung bisa.
+- **Tidak ada push GitHub** (tidak ada perintah push v7.2).
+
+### Yang masih butuh Tuan (build dikirim TANPA kunci)
+- Tuan harus menempel kunci OpenRouter-nya sendiri: Settings → "Model cadangan
+  (OpenRouter)" → field kunci → Simpan. Kunci gratis: daftar di openrouter.ai →
+  Keys → Create Key. Tanpa kunci, fallback TIDAK aktif dan perilaku sama persis
+  dengan v7.1.
+
+### Yang belum diuji di perangkat
+- Fallback end-to-end (Gemini gagal → OpenRouter menjawab) hanya bisa dibuktikan di
+  HP Tuan dengan kunci terisi — VM tidak bisa menjalankan aplikasi dan tidak punya
+  kunci OpenRouter Tuan. Yang sudah diverifikasi di sini: kompilasi bersih, rantai
+  fallback ada di kode (grep), kedua pesan/field Settings ada, sertifikat kunci
+  permanen cocok, izin identik. Ingatan jujur: model cadangan TIDAK menyelesaikan
+  sinyal 0,1 KB/d — semua model cloud butuh internet; yang diselesaikan fallback
+  adalah "Gemini-nya overload", bukan "tidak ada sinyal".
+
+## v7.3 — Auto-scroll fling 120ms untuk YouTube Shorts/Reels (24 Nov 2026, ~15:27 WIB)
+
+### Masalah (laporan Tuan)
+- Auto-scroll "gkjalan soalnya aku buat yt reels": di YouTube Shorts/Reels tidak ada video yang pindah.
+- Penyebab terverifikasi dari kode: auto-scroll memanggil `tool.swipe("up")` yang
+  memakai durasi default 300ms — drag LAMBAT dari 70% ke 30% tinggi layar.
+  Shorts/Reels memakai snap pager (ViewPager2): drag lambat tidak melewati
+  ambang kecepatan fling, jadi pager snap BALIK ke video yang sama.
+  `dispatchGesture` tetap mengembalikan true, jadi worker menghitungnya sukses
+  dan tidak pernah mencapai pemberhentian 3-kegagalan.
+
+### Perbaikan (satu call site + satu konstanta)
+- `bubble/AutoScrollWorker.kt`: `tool.swipe("up")` → `tool.swipe("up", FLING_DURATION_MS)`,
+  `FLING_DURATION_MS = 120L` — jalur sama (tengah x, 70% -> 30% tinggi), durasi 120ms
+  (fling cepat, bukan drag).
+- Plumbing sudah ada: `Tool.swipe(direction, durationMs = 300)` → `AccessibilityTools`
+  → `ActionExecutor.swipeDirection(direction, durationMs)` → `swipe(..., durationMs)` —
+  tidak ada file lain yang diubah untuk ini.
+- Skill `swipe` TIDAK berubah: `SkillRunner.kt:186` memakai default 300ms
+  (`args["durationMs"]?.toLongOrNull() ?: 300`) — drag presisi untuk list/form tetap.
+- Tidak berubah: interval 30 dtk, pemberhentian 3 kegagalan, flag, palet/bahasa,
+  ActionGate, SkillRunner, PlanningAgent, CodeAgent, WatcherEngine, RemoteGateway,
+  MemoryStore, izin, dependensi.
+
+### Build & verifikasi
+- Perintah standar (biner Gradle cache langsung — `./gradlew` tidak dipakai):
+  `GRADLE_USER_HOME=/home/hatch/.gradle`, `JAVA_HOME=~/workspace/rea-env/providers/jdk-21.0.13.1+2`,
+  `JAVA_TOOL_OPTIONS=-Djava.net.preferIPv4Stack=true`, `ANDROID_HOME=~/android-sdk`,
+  `gradle-8.9/bin/gradle assembleDebug` dari `~/workspace/mobius-android/mobius/`.
+- `assembleDebug` BERHASIL, EXIT 0, 16 dtk (6 executed, 34 up-to-date).
+- **APK:** `~/workspace/your_files/mobius-debug-v7.3.apk`, **61.668.827 byte**,
+  SHA-256 `6e143936ab5b5f9f42ae024cfa3cd7f085cae350c6674bc1f45568666c02ecb1`.
+- aapt2: `com.mobius`, versionName `0.1.0`; 12 izin, identik dengan v7/v7.1/v7.2
+  (termasuk RECORD_AUDIO) — tidak ada izin baru.
+- Tanda tangan: keystore permanen `~/workspace/mobius-android/mobius-release.keystore`
+  (alias mobius); apksigner verify: sertifikat SHA-256
+  `fc30510abaa8848d5ce040b2a04049e95c5648630b6e755f1ab7de4908140e6e` — cocok.
+  **Instal sebagai UPDATE di atas v7.2 (jangan uninstall).**
+- Tidak ada push GitHub.
+
+### Yang belum diuji di perangkat
+- Fling TIDAK bisa diverifikasi di VM (tidak ada HP, tidak ada Shorts). Tuan harus
+  tes di YouTube Shorts: nyalakan auto-scroll, tunggu 30 dtk, video harus pindah
+  ke berikutnya. Kalau masih snap balik, langkah berikut: stroke lebih panjang /
+  lebih cepat (mis. 80ms atau 70% -> 20%) — dan itu harus dicoba di HP, bukan
+  ditebak dari sini.
+
+---
+
+## v7.4 — "ringkas halaman ini" (SummarizePageAgent) — 24 Nov 2026 ~15:37 WIB
+
+### Penyebab (dibuktikan Tuan di HP, 24 Nov 15:32)
+Di artikel detiknews di Chrome, Tuan minta bubble merangkum halaman; model
+menjawab "Please share the text or URL". Benar: chat bubble hanya mengirim
+teks ketikan ke model — tidak ada agen/skill Android yang membaca layar
+sebagai konteks. Bukan salah model, bukan salah koneksi.
+
+### Yang dibangun (agen ke-3, bentuk sama seperti ChatAgent/ReplyWhatsAppAgent)
+- `agent/AgentFactory.kt`: `SummarizePageAgent` baru (`name = "SummarizePageTask"`)
+  + case baru di `AgentFactory.create`. Alur: (1) ambil paket aplikasi depan
+  dari `ctx.foregroundApp` (UsageStats, sudah mengecualikan paket MOBIUS
+  sendiri) dengan fallback `reader.currentPackage()`; paket `com.mobius`
+  ditolak (jangan merangkum jendela bubble sendiri). (2) Baca teks layar
+  lewat primitif `readScreen(pkg, 200)` yang sudah ada — READ-ONLY, tanpa
+  ketuk/ketik, jadi tanpa screen lock dan tanpa ActionGate. (3) Dedupe baris
+  identik (pohon WebView sering mengulang teks node yang sama) + potong ke
+  `FileExtractor.MAX_CHARS` = 8000 (konvensi yang sama dengan file lampiran).
+  (4) Minta ringkasan ke AI lewat `AIRouter.generate(..., heavy = true)` —
+  rantai fallback YANG SAMA seperti chat (Nano -> Gemini cloud timeout 30 dtk
+  -> OpenRouter bila ada kunci); heavy=true karena ringkasan 8000 karakter
+  adalah penalaran berat, bukan tugas Nano. Ringkasan dikembalikan sebagai outcome.
+- `core/TaskRouter.kt`: `AgentType.SUMMARIZE_PAGE` baru; `parse()` memetakan
+  intent LLM `"summarize_page"`; `heuristic()` (fallback kata kunci) memeriksa
+  frasa persis "ringkas halaman ini", "rangkum halaman ini",
+  "summarize this page", "apa isi halaman ini", "ringkas ini" + pola
+  (ringkas|rangkum|summarize) + (halaman|page|ini|artikel|berita|layar).
+- `ai/PromptBuilder.kt`: skema `intentPrompt` tambah `"summarize_page"` +
+  baris penjelas; `summarizePrompt(pageText, languageName, ctx)` baru —
+  teks halaman dibingkai sebagai DATA (bukan instruksi, sama seperti aturan
+  file lampiran): model dilarang mengikuti instruksi di dalamnya dan dilarang
+  mengarang fakta; fokus isi utama, abaikan menu/iklan/navigasi. pageText
+  TIDAK lewat `clip()` (400 karakter akan memotong artikel).
+- `ui/MobiusStrings.kt`: 6 field baru (ID + EN): sumReading, sumSummarizing,
+  sumNoText, sumNoApp, sumNoAccess, sumFailed. Default Bahasa Indonesia.
+- `agent/SubAgent.kt`: `AgentTools.language` baru (default getter ID).
+- `core/Orchestrator.kt`: `buildTools()` jadi suspend + membaca bahasa aktif
+  dari `LanguageManager` (gagal baca -> ID) dan meng-override
+  `AgentTools.language`. `dispatchAgent` TIDAK diubah: SUMMARIZE_PAGE bukan
+  CHAT (lolos dari planning-loop gate) dan mengalir lewat jalur generik
+  `agentFactory.create` — read-only, tanpa screen lock, seperti chat.
+- Kegagalan jujur (tidak pernah ada ringkasan karangan): tanpa reader
+  aksesibilitas -> sumNoAccess; tanpa aplikasi depan / paketnya MOBIUS sendiri
+  -> sumNoApp; teks terbaca < 50 karakter (aplikasi gambar-kanvas, game,
+  pemutar video) -> sumNoText "Tidak ada teks yang bisa dibaca di layar ini. ...".
+
+### Tidak berubah
+Fling auto-scroll v7.3, interval 30 dtk, flag, palet/bahasa, ActionGate,
+SkillRunner, PlanningAgent, CodeAgent, WatcherEngine, RemoteGateway,
+MemoryStore, izin, dependensi, rantai fallback OpenRouter, timeout cloud 30 dtk.
+
+### Build & verifikasi
+- Perintah standar (biner Gradle cache langsung — `./gradlew` tidak dipakai):
+  `GRADLE_USER_HOME=/home/hatch/.gradle`,
+  `JAVA_HOME=~/workspace/rea-env/providers/jdk-21.0.13.1+2`,
+  `JAVA_TOOL_OPTIONS=-Djava.net.preferIPv4Stack=true`, `ANDROID_HOME=~/android-sdk`,
+  `gradle-8.9/bin/gradle assembleDebug` dari `~/workspace/mobius-android/mobius/`.
+- `assembleDebug` BERHASIL, EXIT 0, 46 dtk (6 executed, 34 up-to-date).
+  Peringatan yang muncul sudah ada sebelumnya (bukan dari v7.4): `!!` di
+  ReplyWhatsAppAgent, SOFT_INPUT_ADJUST_RESIZE + LocalLifecycleOwner deprecated.
+- **APK:** `~/workspace/your_files/mobius-debug-v7.4.apk`, **61.668.827 byte**,
+  SHA-256 `373484647884b90253c39e48da0a1f050f6e101a82cdd995345592c5bcdc2f27`.
+  (Ukuran byte sama persis dengan v7.2/v7.3 — kebetulan padding dex; isi
+  TERBUKTI beda: SHA beda, dan strings di classes.dex mengandung
+  "SummarizePageTask", "summarize_page" (3x), serta pesan Indonesia sumNoText.)
+- aapt2: `com.mobius`, versionName `0.1.0`; 12 izin, daftarnya IDENTIK dengan
+  v7.3 (diff kosong) — tidak ada izin baru.
+- Tanda tangan: keystore permanen `~/workspace/mobius-android/mobius-release.keystore`
+  (alias mobius); apksigner verify: sertifikat SHA-256
+  `fc30510abaa8848d5ce040b2a04049e95c5648630b6e755f1ab7de4908140e6e` — cocok.
+  **Instal sebagai UPDATE di atas v7.3 (jangan uninstall).**
+- Tidak ada push GitHub.
+
+### Yang belum diuji di perangkat
+- Alur ringkas TIDAK bisa diverifikasi di VM (tidak ada HP, tidak ada halaman
+  Chrome). Tuan harus tes di artikel sungguhan (mis. detiknews yang sama):
+  buka artikel, buka bubble, ketik "ringkas halaman ini". Yang dicek:
+  (a) router memilih SummarizePageAgent (bukan jawaban chat generik);
+  (b) ringkasannya benar-benar isi artikel itu (bukan karangan);
+  (c) pada layar tanpa teks (mis. pemutar video) muncul pesan "Tidak ada teks
+  yang bisa dibaca di layar ini", bukan ringkasan palsu.
+- Risiko yang diketahui (hanya bisa dibuktikan di HP): `readScreen` hanya
+  membaca teks yang ADA di accessibility tree — WebView Chrome biasanya
+  mengekspos teks artikel, tapi halaman yang baru dimuat sebagian / lazy-load
+  mungkin hanya memberi potongan layar yang terlihat; ringkasan akan
+  mencerminkan potongan itu saja. Kalau ringkasannya terasa tidak lengkap,
+  langkah berikut: scroll dulu dengan `scrollForward` lalu baca lagi, atau
+  gabungkan beberapa pembacaan layar.
+
+## v7.5 — "open YouTube app" gagal 3x: KnownApps resolver (24 Nov 2026 ~16:00 WIB)
+
+### Penyebab (dibuktikan Tuan di HP, 24 Nov 15:49)
+Perintah "open YouTube app" dijawab: "YouTube app could not be launched after
+3 attempts. Current screen com.google.android.documentsui is unreadable.
+YouTube may be disabled, not installed, or blocked." Penyebab dari kode:
+`PlanningAgent.callTool` memanggil `tool.launchApp(a.require("package"))` dan
+nama paketnya 100% berasal dari tebakan JSON model — TIDAK ada resolusi
+nama-ke-paket di mana pun. Model bisa mengirim "youtube" (nama, bukan paket)
+atau mengarang id seperti "com.youtube.app"; `getLaunchIntentForPackage`
+mengembalikan null, tool gagal 3x, loop berhenti di MAX_CONSECUTIVE_FAILURES=3.
+Pesan gagalnya pun tebakan model ("may be disabled, not installed, or blocked")
+dan berbahasa Inggris padahal bahasa app Indonesia.
+
+### Yang dibangun (minimal)
+- **Baru `core/KnownApps.kt`** — SATU map nama -> paket resmi (dipakai planner
+  dan resolver): youtube -> com.google.android.youtube, whatsapp ->
+  com.whatsapp, chrome -> com.android.chrome, gmail -> com.google.android.gm,
+  maps -> com.google.android.apps.maps, instagram -> com.instagram.android,
+  tiktok -> com.zhiliaoapp.musically, shopee -> com.shopee.id, tokopedia ->
+  com.tokopedia.tkpd, gojek -> com.gojek.app, grab -> com.grabtaxi.passenger,
+  dana -> id.dana, ovo -> ovo.id. Alias argumen: yt/wa/ig. Hanya id paket
+  resmi yang dikenal yang ada di sini; app yang tidak yakin sengaja tidak
+  dimasukkan — tebakannya model dipakai apa adanya seperti sebelumnya.
+  `resolvePackage(argumen, teksTugas)`: nama/alias yang dikenal -> paket map;
+  teks tugas menyebut app yang dikenal dan argumen BUKAN paket app itu ->
+  paket map (map menang atas tebakan salah); argumen yang SUDAH merupakan
+  paket app yang disebut di teks tugas dipertahankan (jadi tugas multi-app
+  tetap jalan langkah demi langkah). `displayName(paket)` -> "YouTube" dll.
+  `findInText(teks)` -> app yang dikenal dalam teks, urut kemunculan.
+- **`agent/PlanningAgent.kt`** — sebelum ActionGate DAN sebelum tool dipanggil,
+  argumen launchApp dilewatkan `KnownApps.resolvePackage(raw, ctx.userText)`:
+  gate jadi memeriksa paket ASLI (string yang salah sebelumnya bisa lolos dari
+  daftar app sensitif), dan model melihat paket hasil resolusi di history-nya
+  untuk langkah berikut. Pesan gagal 3x untuk launchApp sekarang dalam bahasa
+  aktif (`stringsFor(tools.language)`), menyebut paket persis yang dicoba:
+  ID "Tidak bisa membuka YouTube (com.google.android.youtube) setelah 3 kali
+  coba. Mungkin aplikasinya tidak terinstal atau dinonaktifkan." Tool lain
+  tetap memakai pesan generik lama.
+- **`ai/PromptBuilder.kt`** — deskripsi tool launchApp di prompt planning
+  (yang dilihat model) dan di KDoc: `launchApp(appNameOrPackage)` — nama app
+  (YouTube, WhatsApp, ...) boleh dikirim, akan diresolusi ke paket asli;
+  jangan mengarang id paket.
+- **`ui/MobiusStrings.kt`** — field baru `planLaunchFailed` (%1$s = nama
+  tampil app, %2$s = paket yang dicoba), ID + EN.
+
+### Tidak berubah
+Fling auto-scroll v7.3, agen ringkas v7.4, interval 30 dtk, flag, palet/bahasa,
+ActionGate, SkillRunner, CodeAgent, WatcherEngine, RemoteGateway, MemoryStore,
+izin, dependensi, rantai fallback OpenRouter, timeout cloud 30 dtk, batas loop
+(15 langkah / 3 kegagalan beruntun).
+
+### Build & verifikasi
+- Perintah standar (biner Gradle cache langsung — `./gradlew` tidak dipakai):
+  `GRADLE_USER_HOME=/home/hatch/.gradle`,
+  `JAVA_HOME=~/workspace/rea-env/providers/jdk-21.0.13.1+2`,
+  `JAVA_TOOL_OPTIONS=-Djava.net.preferIPv4Stack=true`, `ANDROID_HOME=~/android-sdk`,
+  `gradle-8.9/bin/gradle assembleDebug` dari `~/workspace/mobius-android/mobius/`.
+- `assembleDebug` BERHASIL, EXIT 0, 41 dtk (6 executed, 34 up-to-date).
+  Peringatan yang muncul sudah ada sebelumnya (bukan dari v7.5): `!!` di
+  ReplyWhatsAppAgent, SOFT_INPUT_ADJUST_RESIZE + LocalLifecycleOwner deprecated.
+- **APK:** `~/workspace/your_files/mobius-debug-v7.5.apk`, **61.417.351 byte**,
+  SHA-256 `c7159b552de0a18841b920a647f7b293212fbc15040c6a1e9e1ec7e1ff4c73a5`.
+  (Ukuran byte beda dari v7.4 — isi TERBUKTI beda: SHA beda, dan strings di
+  classes.dex mengandung "KnownApps" (21x), "planLaunchFailed" (2x),
+  "com.google.android.youtube" dan "Tidak bisa membuka".)
+- aapt2: `com.mobius`, versionName `0.1.0`; 12 izin, daftarnya IDENTIK dengan
+  v7.4 (diff kosong) — tidak ada izin baru.
+- Tanda tangan: keystore permanen `~/workspace/mobius-android/mobius-release.keystore`
+  (alias mobius); apksigner verify: sertifikat SHA-256
+  `fc30510abaa8848d5ce040b2a04049e95c5648630b6e755f1ab7de4908140e6e` — cocok.
+  **Instal sebagai UPDATE di atas v7.4 (jangan uninstall).**
+- Tidak ada push GitHub.
+
+### Yang belum diuji di perangkat
+- Launch TIDAK bisa diverifikasi di VM (tidak ada HP, tidak ada YouTube).
+  Tuan harus tes ulang "open YouTube app" / "buka YouTube". Yang dicek:
+  (a) YouTube terbuka pada langkah 1; (b) kalau tetap gagal, pesan baru
+  menyebut paket persis yang dicoba — dari situ ketahuan apakah YouTube
+  memang tidak terinstal/dinonaktifkan di HP-nya (itu langkah berikut,
+  bukan ditebak dari sini).
+- Batas yang diketahui: resolusi hanya berlaku untuk tool launchApp di
+  PlanningAgent (bukan skill — skill memakai paket dari JSON skill-nya
+  sendiri); app di luar 13 nama yang dikenal tetap mengandalkan tebakan model.
