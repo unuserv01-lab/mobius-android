@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "1035973413407",
+    "project_id": "gen-lang-client-0936734513",
+    "storage_bucket": "gen-lang-client-0936734513.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1035973413407:android:1eba6ad83cbc872a77e32a",
+        "android_client_info": {
+          "package_name": "com.aistudio.mobius.qxvzkj"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCv9Kj_Mwi0pW0HoCkyiqzgxSwebA-gDNs"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1035973413407:android:874bacfcc691495c77e32a",
+        "android_client_info": {
+          "package_name": "com.mobius"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCv9Kj_Mwi0pW0HoCkyiqzgxSwebA-gDNs"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

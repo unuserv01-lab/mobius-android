@@ -1,0 +1,77 @@
+{
+  "description": "Search Shopee for a product and return the top 5 prices found on screen.",
+  "id": "shopee_price_search",
+  "maxSteps": 12,
+  "name": "Shopee price search",
+  "params": [
+    {
+      "name": "query",
+      "required": true
+    }
+  ],
+  "steps": [
+    {
+      "args": {
+        "package": "com.shopee.id"
+      },
+      "tool": "launchApp"
+    },
+    {
+      "args": {
+        "package": "com.shopee.id",
+        "text": "Cari",
+        "timeoutMs": "8000"
+      },
+      "onFail": "skip",
+      "tool": "waitForText"
+    },
+    {
+      "args": {
+        "exact": "false",
+        "package": "com.shopee.id",
+        "text": "Cari"
+      },
+      "tool": "tapText"
+    },
+    {
+      "args": {
+        "package": "com.shopee.id",
+        "text": "$query"
+      },
+      "tool": "type"
+    },
+    {
+      "args": {
+        "ms": "3000"
+      },
+      "tool": "wait"
+    },
+    {
+      "args": {
+        "limit": "100",
+        "package": "com.shopee.id"
+      },
+      "storeAs": "screen",
+      "tool": "readScreen"
+    },
+    {
+      "args": {
+        "max": "5",
+        "package": "com.shopee.id",
+        "pattern": "Rp\\s?[0-9][0-9.,]*"
+      },
+      "storeAs": "prices",
+      "tool": "extract",
+      "when": "last.success"
+    }
+  ],
+  "summarize": true,
+  "timeoutMs": 60000,
+  "triggers": [
+    "shopee",
+    "cari harga",
+    "cek harga",
+    "bandingkan harga",
+    "harga di shopee"
+  ]
+}
