@@ -42,9 +42,18 @@
     },
     {
       "args": {
-        "ms": "3000"
+        "package": "com.shopee.id"
       },
-      "tool": "wait"
+      "tool": "submit"
+    },
+    {
+      "args": {
+        "package": "com.shopee.id",
+        "text": "Rp",
+        "timeoutMs": "10000"
+      },
+      "onFail": "skip",
+      "tool": "waitForText"
     },
     {
       "args": {

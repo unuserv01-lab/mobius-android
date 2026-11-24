@@ -5,7 +5,13 @@ import android.app.PendingIntent
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Log
+import com.mobius.MobiusApp
 import com.mobius.core.AppConfig
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import java.util.concurrent.CopyOnWriteArrayList
 
 /** A notification as the core sees it. Held in memory only; never persisted, TTL-pruned (P6, P10). */
@@ -53,6 +59,11 @@ object NotificationCache {
  */
 class NotificationListener : NotificationListenerService() {
 
+    // v6 Workstream D: the WA watcher runs off this service's own scope. A failure inside
+    // the watcher must never break notification capture, so the call is wrapped in runCatching.
+    private val watcherScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val watcherEngine by lazy { (application as MobiusApp).watcherEngine() }
+
     override fun onListenerConnected() {
         NotificationCache.listenerConnected = true
         try {
@@ -64,6 +75,11 @@ class NotificationListener : NotificationListenerService() {
 
     override fun onListenerDisconnected() {
         NotificationCache.listenerConnected = false
+    }
+
+    override fun onDestroy() {
+        watcherScope.cancel()
+        super.onDestroy()
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) = capture(sbn)
@@ -83,16 +99,24 @@ class NotificationListener : NotificationListenerService() {
             ?: extras.getCharSequence(Notification.EXTRA_TEXT))?.toString().orEmpty()
         if (title.isBlank() && text.isBlank()) return
 
-        NotificationCache.add(
-            CapturedNotification(
-                key = sbn.key,
-                packageName = sbn.packageName,
-                sender = title,
-                text = text,
-                postTime = sbn.postTime,
-                contentIntent = n.contentIntent,
-            )
+        val captured = CapturedNotification(
+            key = sbn.key,
+            packageName = sbn.packageName,
+            sender = title,
+            text = text,
+            postTime = sbn.postTime,
+            contentIntent = n.contentIntent,
         )
+        NotificationCache.add(captured)
+
+        // v6 Workstream D: hand the captured notification + the raw Notification (for its
+        // RemoteInput reply action) to the WA watcher. The watcher itself checks the
+        // WA_WATCHER flag, the WhatsApp packages and the standing rules; when the flag is
+        // OFF or no rule matches it does nothing, so v5 behavior is unchanged.
+        watcherScope.launch {
+            runCatching { watcherEngine.onNotification(captured, n) }
+                .onFailure { Log.w(TAG, "WA watcher failed for ${sbn.key}", it) }
+        }
     }
 
     private companion object {

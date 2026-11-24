@@ -39,6 +39,7 @@ private fun fmt(ms: Long) = timeFormat.format(Date(ms))
 fun HistoryScreen(app: MobiusApp) {
     val memory by app.memoryStore.observeMemory().collectAsState(initial = emptyList())
     val routing by app.memoryStore.observeRoutingLog().collectAsState(initial = emptyList())
+    val trail by app.memoryStore.observeTaskTrail().collectAsState(initial = emptyList())
     val scope = rememberCoroutineScope()
 
     // Show only live data: purge anything that expired while this screen was closed.
@@ -49,7 +50,51 @@ fun HistoryScreen(app: MobiusApp) {
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        item { Text("AI routing log", style = MaterialTheme.typography.titleLarge) }
+        // (v5) Skill task step trail: latest tasks first, steps marked ✓/✗ + duration,
+        // plus the plan decision and every ActionGate decision.
+        item { Text("Task step trail", style = MaterialTheme.typography.titleLarge) }
+        val trailGroups = trail.groupBy { it.taskId }.entries.take(5)
+        if (trailGroups.isEmpty()) {
+            item { Text("No skill tasks yet.", style = MaterialTheme.typography.bodySmall) }
+        }
+        for ((taskId, rows) in trailGroups) {
+            item {
+                Card(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        val head = rows.first()
+                        Text(
+                            "${head.skillName} — \"${head.userText.take(40)}\"",
+                            style = MaterialTheme.typography.titleSmall,
+                        )
+                        Text(
+                            "task $taskId - ${fmt(head.createdAt)}",
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                        for (row in rows.sortedBy { it.id }) {
+                            when (row.tool) {
+                                "plan" -> Text(
+                                    if (row.success) "Rencana: disetujui" else "Rencana: dibatalkan",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                )
+                                "gate" -> Text(
+                                    "GATE ${row.gateDecision}: ${row.message}",
+                                    color = if (row.success) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                )
+                                else -> Text(
+                                    "${if (row.success) "✓" else "✗"} ${row.stepIndex + 1}. ${row.tool} — " +
+                                        "${row.message.take(120)} (${row.durationMs}ms)",
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        item { Text("AI routing log", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(top = 16.dp)) }
         if (routing.isEmpty()) {
             item { Text("No AI calls yet.", style = MaterialTheme.typography.bodySmall) }
         }

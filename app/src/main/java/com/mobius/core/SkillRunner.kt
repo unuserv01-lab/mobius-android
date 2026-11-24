@@ -12,7 +12,11 @@ import kotlinx.coroutines.delay
  *   - calls exactly one Layer 1 tool per step;
  *   - evaluates `when` (see [Skill] for the condition language);
  *   - honors `onFail` (fail | skip | stop) and `maxRetries`;
- *   - enforces the skill's `maxSteps` and wall-clock `timeoutMs`.
+ *   - enforces the skill's `maxSteps` and wall-clock `timeoutMs`;
+ *   - (v5) asks the [ActionGate] before EVERY step: a step into a sensitive app is DENIED
+ *     (skill stops at once); a step marked risk="irreversible" pauses for the user's
+ *     approval via [onConfirmStep] — no hook means deny (fail closed). Every gate decision
+ *     is collected into the outcome for the audit trail.
  *
  * The LLM never runs here. Its only jobs stay where they were: picking the skill + filling
  * params ([TaskRouter]) and summarizing the structured result ([AIRouter], only when the skill
@@ -25,6 +29,8 @@ class SkillRunner {
         params: Map<String, String>,
         tool: Tool,
         onStatus: (String) -> Unit = {},
+        gate: ActionGate = ActionGate,
+        onConfirmStep: (suspend (String) -> Boolean)? = null,
     ): SkillOutcome {
         if (skill.steps.size > skill.maxSteps) {
             return SkillOutcome(
@@ -43,6 +49,7 @@ class SkillRunner {
 
         val deadline = SystemClock.elapsedRealtime() + skill.timeoutMs
         val results = mutableListOf<StepResult>()
+        val gateDecisions = mutableListOf<GateDecisionRecord>()
         var last: ToolResult? = null
         var failed = false
         var partial = false
@@ -61,19 +68,69 @@ class SkillRunner {
             }
 
             onStatus("Step ${index + 1}/${skill.steps.size}: ${step.tool}...")
+
+            // Resolve $params/$vars ONCE, before the gate (the gate needs the resolved package).
+            var resolveError: String? = null
+            val resolved: Map<String, String>? = try {
+                step.args.mapValues { (_, v) -> resolveRefs(v, vars) }
+            } catch (e: Exception) {
+                resolveError = e.message ?: e.javaClass.simpleName
+                null
+            }
+
             var result: ToolResult? = null
             var attempt = 0
             val started = SystemClock.elapsedRealtime()
-            while (true) {
-                result = try {
-                    val resolved = step.args.mapValues { (_, v) -> resolveRefs(v, vars) }
-                    callTool(tool, step.tool, resolved)
-                } catch (e: Exception) {
-                    ToolResult(false, e.message ?: e.javaClass.simpleName)
+            if (resolved == null) {
+                // Missing $ref: fails the step exactly as before (no tool call, no gate check).
+                result = ToolResult(false, resolveError ?: "missing parameter")
+            } else {
+                // --- ActionGate (v5): every step is checked BEFORE it runs. ---
+                val gateResult = gate.check(step.tool, resolved["package"], step.risk)
+                when (gateResult.decision) {
+                    GateDecision.DENIED -> {
+                        gateDecisions += GateDecisionRecord(
+                            index, step.tool, resolved["package"],
+                            GateDecision.DENIED, null, gateResult.reason,
+                        )
+                        val msg = "Ditolak ActionGate: ${gateResult.reason}"
+                        results += StepResult(index, step.tool, false, msg, 0)
+                        failed = true
+                        failMessage = "Langkah ${index + 1} (${step.tool}) ditolak: ${gateResult.reason}"
+                        break
+                    }
+                    GateDecision.NEEDS_APPROVAL -> {
+                        val desc = "Langkah ${index + 1}: ${step.tool} (${describeArgs(resolved)}) — aksi tak terbalikkan."
+                        // No approval hook means deny: never run an irreversible step blind.
+                        val ok = onConfirmStep?.invoke(desc) ?: false
+                        if (!ok) {
+                            gateDecisions += GateDecisionRecord(
+                                index, step.tool, resolved["package"],
+                                GateDecision.NEEDS_APPROVAL, "rejected", gateResult.reason,
+                            )
+                            val msg = "Ditolak pengguna: ${gateResult.reason}"
+                            results += StepResult(index, step.tool, false, msg, 0)
+                            failed = true
+                            failMessage = "Dibatalkan pengguna pada langkah ${index + 1} (${step.tool}): ${gateResult.reason}"
+                            break
+                        }
+                        gateDecisions += GateDecisionRecord(
+                            index, step.tool, resolved["package"],
+                            GateDecision.NEEDS_APPROVAL, "approved", gateResult.reason,
+                        )
+                    }
+                    GateDecision.ALLOW -> Unit
                 }
-                if (result.success || attempt >= step.maxRetries) break
-                attempt++
-                delay(300)
+                while (true) {
+                    result = try {
+                        callTool(tool, step.tool, resolved)
+                    } catch (e: Exception) {
+                        ToolResult(false, e.message ?: e.javaClass.simpleName)
+                    }
+                    if (result.success || attempt >= step.maxRetries) break
+                    attempt++
+                    delay(300)
+                }
             }
             val duration = SystemClock.elapsedRealtime() - started
             val r = result
@@ -110,13 +167,18 @@ class SkillRunner {
                 else "Partially done (some steps skipped): ${lastOk?.message ?: skill.name}."
             else -> lastOk?.message?.takeIf { it.isNotBlank() } ?: "Done: ${skill.name}."
         }
-        return SkillOutcome(!failed, partial, message, results, vars)
+        return SkillOutcome(!failed, partial, message, results, vars, gateDecisions)
     }
+
+    /** "package=com.shopee.id, text=sepatu" — for the approval dialog and the plan card. */
+    private fun describeArgs(args: Map<String, String>): String =
+        args.entries.joinToString(", ") { (k, v) -> "$k=$v" }
 
     private suspend fun callTool(tool: Tool, name: String, args: Map<String, String>): ToolResult = when (name) {
         "launchApp" -> tool.launchApp(args.require("package"))
         "tapText" -> tool.tapText(args.require("package"), args.require("text"), args["exact"]?.toBooleanStrictOrNull() ?: true)
         "type" -> tool.type(args.require("package"), args.require("text"))
+        "submit" -> tool.submit(args.require("package"))
         "readScreen" -> tool.readScreen(args.require("package"), args["limit"]?.toIntOrNull() ?: 200)
         "findText" -> tool.findText(args.require("package"), args.require("text"), args["exact"]?.toBooleanStrictOrNull() ?: true)
         "extract" -> tool.extract(args.require("package"), args.require("pattern"), args["max"]?.toIntOrNull() ?: 5)
@@ -126,6 +188,15 @@ class SkillRunner {
         "home" -> tool.home()
         "wait" -> tool.waitMs(args["ms"]?.toLongOrNull() ?: 1_000)
         "waitForText" -> tool.waitForText(args.require("package"), args.require("text"), args["timeoutMs"]?.toLongOrNull() ?: 5_000)
+        // v6 CodeAgent — the gate (flag + ActionGate) is enforced inside the Tool
+        // implementation; "args" for runCommand is one comma-separated string in JSON
+        // (e.g. "args": "script.sh"), because skill args are strings.
+        "readFileScoped" -> tool.readFileScoped(args.require("path"))
+        "writeFileScoped" -> tool.writeFileScoped(args.require("path"), args.require("content"))
+        "runCommand" -> tool.runCommand(
+            args.require("command"),
+            args["args"]?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() } ?: emptyList(),
+        )
         else -> ToolResult(false, "Unknown tool: $name")
     }
 

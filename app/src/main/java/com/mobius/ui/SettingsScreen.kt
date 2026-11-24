@@ -122,6 +122,14 @@ fun SettingsScreen(app: MobiusApp, onRerunSetup: () -> Unit) {
             )
         }
 
+        // ---- v6 feature flags (Step 0) ----
+        // One Switch per flag, all ON by default. OFF = v5 behavior exactly for that feature.
+        FeatureFlagsSection(app)
+
+        // ---- v6 UI wiring: watcher rules + remote gateway (own sections) ----
+        WatcherRulesSection(app)
+        RemoteGatewaySection(app)
+
         // ---- Data & setup ----
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Your data", style = MaterialTheme.typography.titleMedium)

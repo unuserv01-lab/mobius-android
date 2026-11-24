@@ -35,7 +35,11 @@
         android:roundIcon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:supportsRtl="true"
-        android:theme="@style/Theme.Mobius">
+        android:theme="@style/Theme.Mobius"
+        android:usesCleartextTraffic="true">
+        <!-- v6 remote gateway: the laptop bridge is plain HTTP on the home LAN
+             (no TLS by design, LAN-only) — cleartext must be allowed or every
+             bridge call fails with "Cleartext HTTP traffic not permitted". -->
 
         <activity
             android:name=".ui.MainActivity"

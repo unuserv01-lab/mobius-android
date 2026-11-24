@@ -38,9 +38,13 @@ import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.mobius.MobiusApp
 import com.mobius.R
+import com.mobius.ai.VoiceOutput
 import com.mobius.core.AppConfig
+import com.mobius.core.ChatMessage
+import com.mobius.core.FeatureFlag
 import com.mobius.core.TaskHooks
 import com.mobius.core.TaskOutcome
+import com.mobius.ui.MainActivity
 import com.mobius.ui.MobiusTheme
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -48,6 +52,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -77,6 +82,18 @@ class BubbleService : Service() {
     private val working = mutableStateOf(false)
     private var chipJob: Job? = null
 
+    // v6 (F): voice output — speaks the assistant's short result (no-op when VOICE_OUTPUT is OFF).
+    private val voiceOutput by lazy { VoiceOutput(this).also { it.start() } }
+    // v6 (G): deterministic auto-scroll loop (no AI, no tokens).
+    private val autoScrollWorker by lazy { AutoScrollWorker(this) }
+    private val autoScrolling = mutableStateOf(false)
+    // v6 (M-UI): same conversation as Home, fed by observeChatMessages().
+    private val chatMessages = mutableStateOf<List<ChatMessage>>(emptyList())
+    // v6 flags (default true; OFF hides the matching UI, v5 behavior).
+    private val autoScrollOn = mutableStateOf(true)
+    private val chatHistoryOn = mutableStateOf(true)
+    private val localFilesOn = mutableStateOf(true)
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -85,6 +102,15 @@ class BubbleService : Service() {
         owner.create()
         startAsForeground()
         running = true
+        // v6: keep flag + chat-history state fresh for the overlay compositions.
+        serviceScope.launch {
+            val app = application as MobiusApp
+            launch { app.featureFlags.isEnabled(FeatureFlag.AUTO_SCROLL).collect { autoScrollOn.value = it } }
+            launch { app.featureFlags.isEnabled(FeatureFlag.CHAT_HISTORY).collect { chatHistoryOn.value = it } }
+            launch { app.featureFlags.isEnabled(FeatureFlag.LOCAL_FILES).collect { localFilesOn.value = it } }
+            launch { app.memoryStore.observeChatMessages().collect { chatMessages.value = it } }
+            launch { autoScrollWorker.running.collect { autoScrolling.value = it } }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -99,6 +125,8 @@ class BubbleService : Service() {
 
     override fun onDestroy() {
         running = false
+        autoScrollWorker.shutdown()
+        voiceOutput.shutdown()
         removeView(bubbleRoot); bubbleRoot = null
         removeView(panelRoot); panelRoot = null
         owner.destroy()
@@ -138,7 +166,15 @@ class BubbleService : Service() {
             return
         }
         val root = composeHost {
-            MobiusTheme { BubbleView(status = chipText.value, working = working.value) }
+            MobiusTheme {
+                BubbleView(
+                    status = chipText.value,
+                    working = working.value,
+                    // v6 (G): visible Stop button while the loop runs.
+                    autoScrolling = autoScrolling.value,
+                    onStopAutoScroll = { autoScrollWorker.stop() },
+                )
+            }
         }
         root.setOnTouchListener(
             DragTouchListener(bubbleParams, windowManager, ViewConfiguration.get(this).scaledTouchSlop) {
@@ -178,6 +214,16 @@ class BubbleService : Service() {
                             consumer(VoiceInput.listenOnce(this@BubbleService))
                         }
                     },
+                    // v6 (M-UI): same conversation as Home.
+                    messages = chatMessages.value,
+                    chatHistoryOn = chatHistoryOn.value,
+                    // v6 (N-UI): attach via MainActivity's picker.
+                    localFilesOn = localFilesOn.value,
+                    onAttach = ::onAttachRequest,
+                    // v6 (G): auto-scroll toggle.
+                    autoScrollOn = autoScrollOn.value,
+                    autoScrolling = autoScrolling.value,
+                    onToggleAutoScroll = ::onToggleAutoScroll,
                 )
             }
         }
@@ -204,8 +250,12 @@ class BubbleService : Service() {
     }
 
     private fun onPanelClose() {
-        val state = panelState.value
-        if (state is PanelState.Confirm) state.decide(false) else closePanel()
+        when (val state = panelState.value) {
+            is PanelState.Confirm -> state.decide(false)
+            is PanelState.Plan -> state.decide(false)
+            is PanelState.StepConfirm -> state.decide(false)
+            else -> closePanel()
+        }
     }
 
     // ------------------------------------------------------------------ running a task
@@ -217,9 +267,14 @@ class BubbleService : Service() {
         chipJob?.cancel()
         working.value = true
         chipText.value = "Working..."
+        // v6 (F + G): a new task starts — stop any speech and the scroll loop.
+        voiceOutput.stop()
+        autoScrollWorker.stop()
         val app = application as MobiusApp
         serviceScope.launch {
             try {
+                // v6 (M-UI): record the user turn; no-op when CHAT_HISTORY is OFF.
+                app.memoryStore.addChatMessage("user", text)
                 val outcome = app.orchestrator.submit(text, hooks)
                 showOutcome(outcome)
             } catch (e: Exception) {
@@ -229,6 +284,38 @@ class BubbleService : Service() {
             } finally {
                 working.value = false
             }
+        }
+    }
+
+    /**
+     * v6 (N-UI): a Service cannot receive ACTION_OPEN_DOCUMENT results, so
+     * the attach button opens MainActivity, which opens the system picker
+     * (see MainActivity.EXTRA_OPEN_FILE_PICKER). The picked file still goes
+     * through extract -> scan -> alert -> submit in Home.
+     */
+    private fun onAttachRequest() {
+        closePanel()
+        val intent = Intent(this, MainActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            .putExtra(MainActivity.EXTRA_OPEN_FILE_PICKER, true)
+        startActivity(intent)
+    }
+
+    /**
+     * v6 (G): toggles the deterministic swipe loop. Starting closes the
+     * panel so the underlying app is visible; Stop lives on the bubble.
+     */
+    private fun onToggleAutoScroll() {
+        if (autoScrollWorker.running.value) {
+            autoScrollWorker.stop()
+            return
+        }
+        if (autoScrollWorker.start()) {
+            closePanel()
+            chipText.value = "Auto-scroll berjalan — ketuk Stop di bubble untuk berhenti."
+        } else {
+            closePanel()
+            chipText.value = autoScrollWorker.status.value ?: "Auto-scroll tidak bisa dimulai."
         }
     }
 
@@ -247,9 +334,43 @@ class BubbleService : Service() {
                     cont.invokeOnCancellation { mainHandler.post { closePanel() } }
                 }
             }
+
+        /** (v5) Plan card in the bubble panel; same decide/close pattern as confirmSend. */
+        override suspend fun confirmPlan(skillName: String, steps: List<String>): Boolean =
+            withContext(Dispatchers.Main) {
+                suspendCancellableCoroutine<Boolean> { cont ->
+                    openPanel(PanelState.Plan(skillName, steps) { approved ->
+                        closePanel()
+                        if (cont.isActive) cont.resume(approved)
+                    })
+                    cont.invokeOnCancellation { mainHandler.post { closePanel() } }
+                }
+            }
+
+        /** (v5) Irreversible-step approval in the bubble panel. */
+        override suspend fun confirmStep(description: String): Boolean =
+            withContext(Dispatchers.Main) {
+                suspendCancellableCoroutine<Boolean> { cont ->
+                    openPanel(PanelState.StepConfirm(description) { approved ->
+                        closePanel()
+                        if (cont.isActive) cont.resume(approved)
+                    })
+                    cont.invokeOnCancellation { mainHandler.post { closePanel() } }
+                }
+            }
     }
 
     private fun showOutcome(outcome: TaskOutcome) {
+        // v6 (M-UI + F): record the assistant turn, then speak the short
+        // result. Recording is a no-op when CHAT_HISTORY is OFF; speaking is
+        // a no-op when VOICE_OUTPUT is OFF. Only outcome.message is spoken —
+        // never another person's message body.
+        serviceScope.launch {
+            runCatching {
+                (application as MobiusApp).memoryStore.addChatMessage("assistant", outcome.message)
+            }
+            voiceOutput.speak(outcome.message)
+        }
         val short = outcome.message.length <= 80 && '\n' !in outcome.message
         if (short) {
             chipText.value = outcome.message

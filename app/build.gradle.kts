@@ -95,4 +95,9 @@ dependencies {
     implementation("com.google.firebase:firebase-ai:18.2.0")
     implementation("com.google.firebase:firebase-ai-ondevice:16.0.0-beta08")
     implementation("com.google.firebase:firebase-appcheck-debug:20.1.0")
+
+    // --- On-device OCR for the sensitive-data scanner (v6 workstream O-scan) ---
+    // ML Kit text recognition, bundled Latin model: runs fully on-device, no
+    // network, no Play Services download. Used ONLY by SensitiveDataScanner.scanImage.
+    implementation("com.google.mlkit:text-recognition:16.0.1")
 }

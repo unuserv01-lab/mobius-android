@@ -4,6 +4,7 @@ import android.accessibilityservice.AccessibilityService
 import com.mobius.accessibility.ActionExecutor
 import com.mobius.accessibility.ScreenReader
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 
 /**
  * LAYER 1 — TOOLS (closed primitives).
@@ -34,6 +35,14 @@ interface Tool {
     /** Types [text] into the first editable field on screen (replaces its content). */
     suspend fun type(packageName: String, text: String): ToolResult
 
+    /**
+     * Presses Enter/Search on the focused text field (submits a search or a form).
+     * Implemented with AccessibilityNodeInfo.ACTION_IME_ENTER (API 31+); on older Android
+     * there is no supported way to send Enter from an accessibility service, so it fails
+     * honestly instead of pretending success.
+     */
+    suspend fun submit(packageName: String): ToolResult
+
     /** Visible texts on screen, as indexed data entries plus "count". */
     suspend fun readScreen(packageName: String, limit: Int = 200): ToolResult
 
@@ -63,6 +72,30 @@ interface Tool {
 
     /** Waits up to [timeoutMs] for [text] to appear on screen. */
     suspend fun waitForText(packageName: String, text: String, timeoutMs: Long): ToolResult
+
+    // --- v6 CodeAgent (Layer 1, closed primitives — see ScopedFileStore / CommandRunner) ---
+    // All three are gated by the CODE_AGENT feature flag AND by ActionGate; when the flag
+    // is OFF they deny with a clear message and no code runs at all (v5 behavior).
+
+    /**
+     * Reads a text file inside the scoped directory (filesDir/mobius-code).
+     * [path] is relative; absolute paths, ".." traversal and symlinks out are rejected.
+     */
+    suspend fun readFileScoped(path: String): ToolResult
+
+    /**
+     * Writes [content] to a text file inside the scoped directory.
+     * Overwriting an existing file needs user approval (ActionGate NEEDS_APPROVAL) and
+     * is refused without it — callers should use a fresh name per write.
+     */
+    suspend fun writeFileScoped(path: String, content: String): ToolResult
+
+    /**
+     * Runs a command. Allowlist: only `sh` with exactly one argument, a scoped `.sh`
+     * script path, no extra args. No shell is involved (argv list, not a shell line),
+     * so metacharacters / pipes / redirects in [args] are rejected outright.
+     */
+    suspend fun runCommand(command: String, args: List<String> = emptyList()): ToolResult
 }
 
 /**
@@ -91,6 +124,17 @@ class AccessibilityTools(
             ?: return ToolResult(false, "No text field on screen to type into.")
         if (executor.setText(field, text)) ToolResult(true, "Typed text.")
         else ToolResult(false, "The text field did not accept the text.")
+    } catch (e: Exception) {
+        ToolResult(false, e.message ?: e.javaClass.simpleName)
+    }
+
+    override suspend fun submit(packageName: String): ToolResult = try {
+        if (executor.pressEnter(packageName)) ToolResult(true, "Submitted.")
+        else ToolResult(
+            false,
+            "Could not submit: no focused text field, or the field did not accept Enter " +
+                "(needs Android 12+).",
+        )
     } catch (e: Exception) {
         ToolResult(false, e.message ?: e.javaClass.simpleName)
     }
@@ -164,6 +208,82 @@ class AccessibilityTools(
         val found = executor.waitFor(timeoutMs) { reader.findByTextContains(packageName, text) }
         if (found != null) ToolResult(true, "Found \"$text\".")
         else ToolResult(false, "\"$text\" did not appear within ${timeoutMs}ms.")
+    } catch (e: Exception) {
+        ToolResult(false, e.message ?: e.javaClass.simpleName)
+    }
+
+    // --- v6 CodeAgent ---
+    // The scoped store lives under the app-private filesDir, reached through
+    // service.applicationContext — the constructor is NOT changed (Orchestrator.buildTool
+    // is owned by another workstream). Flag OFF = deny, no code runs at all.
+
+    /** Lazily built from the service's application context; no new constructor params. */
+    private val scopedStore: ScopedFileStore by lazy { ScopedFileStore(service.applicationContext) }
+    private val commandRunner: CommandRunner by lazy { CommandRunner(scopedStore) }
+    private val featureFlags: FeatureFlags by lazy { FeatureFlags(service.applicationContext) }
+
+    /** True unless the CODE_AGENT flag was explicitly turned OFF (default ON; read failure = ON). */
+    private suspend fun codeAgentEnabled(): Boolean = try {
+        featureFlags.isEnabled(FeatureFlag.CODE_AGENT).first()
+    } catch (e: Exception) {
+        true
+    }
+
+    private fun codeAgentOffResult(): ToolResult =
+        ToolResult(false, "Code agent is turned off (feature flag CODE_AGENT). Turn it on in Settings to run code tasks.")
+
+    override suspend fun readFileScoped(path: String): ToolResult = try {
+        if (!codeAgentEnabled()) return codeAgentOffResult()
+        val content = scopedStore.read(path)
+            ?: return ToolResult(false, "Could not read '$path': not found, or outside the scoped directory (mobius-code).")
+        ToolResult(true, content.take(500), mapOf("path" to path, "content" to content))
+    } catch (e: Exception) {
+        ToolResult(false, e.message ?: e.javaClass.simpleName)
+    }
+
+    override suspend fun writeFileScoped(path: String, content: String): ToolResult = try {
+        if (!codeAgentEnabled()) return codeAgentOffResult()
+        val gate = ActionGate.checkFileWrite(path, scopedStore.exists(path))
+        when (gate.decision) {
+            GateDecision.DENIED ->
+                return ToolResult(false, "Ditolak ActionGate: ${gate.reason}")
+            GateDecision.NEEDS_APPROVAL ->
+                // No approval hook exists at the Tool layer: fail closed. The caller
+                // (CodeAgent) writes under a fresh name per run, so this is not hit
+                // in normal operation; a skill step hitting it must go through the
+                // SkillRunner confirmStep hook instead.
+                return ToolResult(false, "Butuh persetujuan: ${gate.reason} Tulis ke nama file baru, atau minta persetujuan dulu.")
+            GateDecision.ALLOW -> Unit
+        }
+        if (scopedStore.write(path, content)) ToolResult(true, "Wrote $path (${content.length} chars).", mapOf("path" to path))
+        else ToolResult(false, "Could not write '$path': unsafe path, or file too large (max ${ScopedFileStore.MAX_FILE_CHARS} chars).")
+    } catch (e: Exception) {
+        ToolResult(false, e.message ?: e.javaClass.simpleName)
+    }
+
+    override suspend fun runCommand(command: String, args: List<String>): ToolResult = try {
+        if (!codeAgentEnabled()) return codeAgentOffResult()
+        val gate = ActionGate.checkCommand(command, args)
+        if (gate.decision == GateDecision.DENIED) {
+            return ToolResult(false, "Ditolak ActionGate: ${gate.reason}")
+        }
+        val result = commandRunner.run(command, args)
+        val data = mapOf(
+            "exitCode" to result.exitCode.toString(),
+            "stdout" to result.stdout,
+            "stderr" to result.stderr,
+            "timedOut" to result.timedOut.toString(),
+        )
+        when {
+            result.timedOut -> ToolResult(false, "Command timed out after ${CommandRunner.TIMEOUT_MS / 1000}s and was killed.", data)
+            result.exitCode == 0 -> ToolResult(true, result.stdout.ifBlank { "(no output)" }.take(2000), data)
+            else -> ToolResult(
+                false,
+                "Command exited with code ${result.exitCode}." +
+                    (if (result.stderr.isNotBlank()) " ${result.stderr.take(500)}" else ""),
+                data,
+            )
+        }
     } catch (e: Exception) {
         ToolResult(false, e.message ?: e.javaClass.simpleName)
     }

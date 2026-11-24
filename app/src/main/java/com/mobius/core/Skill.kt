@@ -23,7 +23,11 @@ import org.json.JSONObject
  *     "storeAs": "screen",                  // optional: store result message + data.* into vars
  *     "when": "last.success",               // optional: run only if the condition holds
  *     "onFail": "fail",                     // fail (default) | skip | stop
- *     "maxRetries": 0
+ *     "maxRetries": 0,
+ *     "risk": "irreversible"               // optional (v5): this step needs user approval
+ *                                          // (ActionGate) before it runs; any other value
+ *                                          // is ignored. Read-only steps are never
+ *                                          // irreversible by themselves.
  *   }],
  *   "maxSteps": 20,                         // hard cap on steps executed
  *   "timeoutMs": 60000,                     // hard wall-clock cap for the whole skill
@@ -50,6 +54,8 @@ data class SkillStep(
     /** "fail" (default): stop, outcome failed. "skip": continue, outcome partial. "stop": stop, outcome partial. */
     val onFail: String = "fail",
     val maxRetries: Int = 0,
+    /** "irreversible" (v5): the ActionGate asks the user before this step runs. Null = no risk. */
+    val risk: String? = null,
 )
 
 data class Skill(
@@ -80,6 +86,8 @@ data class SkillOutcome(
     val message: String,
     val steps: List<StepResult>,
     val vars: Map<String, String>,
+    /** Every ActionGate decision made during this run (v5 audit trail). */
+    val gateDecisions: List<GateDecisionRecord> = emptyList(),
 )
 
 /** Parses one skill JSON object. Returns null when the file is malformed (id/steps missing). */
@@ -99,6 +107,8 @@ fun parseSkill(json: JSONObject): Skill? = try {
             whenExpr = s.optString("when").takeIf { it.isNotBlank() },
             onFail = s.optString("onFail", "fail").lowercase().takeIf { it in setOf("fail", "skip", "stop") } ?: "fail",
             maxRetries = s.optInt("maxRetries", 0).coerceIn(0, 3),
+            // Only the exact value "irreversible" counts; anything else (typos included) is ignored.
+            risk = s.optString("risk").takeIf { it == ActionGate.RISK_IRREVERSIBLE },
         )
     }
     if (steps.isEmpty()) return null

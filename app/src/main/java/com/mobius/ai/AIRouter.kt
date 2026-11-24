@@ -4,9 +4,13 @@ import com.mobius.core.MemoryStore
 import com.mobius.core.PermissionManager
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
+import org.json.JSONObject
 
 /** Result of one routed generation. */
 data class AIResponse(val text: String, val model: String, val reason: String)
+
+/** Nano's triage verdict (v6 L): light = stay on-device, heavy = goes to cloud. */
+data class NanoTriageVerdict(val light: Boolean, val reason: String)
 
 /** Thrown when a task needs cloud AI but the user has not allowed it. Never calls the cloud. */
 class CloudRequiredException(val reason: String) : Exception(
@@ -78,6 +82,42 @@ class AIRouter(
         // 4) Cloud allowed by the user: call it and log it.
         val text = cloud.generate(prompt)
         return record(taskId, MODEL_CLOUD, "$cloudReason -> cloud (allowed by user)", text)
+    }
+
+    /**
+     * v6 (L) — Nano triage: BEFORE the planning loop / heavy work starts, ask Nano (when it is
+     * AVAILABLE) for a tiny structured verdict: light tasks stay on-device, heavy tasks go to
+     * cloud. Returns null when Nano is UNAVAILABLE (e.g. Tuan's Xiaomi has no AICore — the
+     * real device) or when Nano fails / answers unparsably: the caller then skips triage and
+     * everything goes through the normal [generate] path (cloud if allowed, else a clear
+     * CloudRequiredException). Every triage decision is logged in the routing log via [log].
+     *
+     * This calls [OnDeviceAI.generate] DIRECTLY, never [generate], so triage itself can never
+     * fall through to the cloud: a classification prompt must not cost a cloud call, and on
+     * a Nano-less device it must cost nothing at all.
+     */
+    suspend fun triage(taskId: String, userText: String): NanoTriageVerdict? {
+        if (onDevice.status() != NanoStatus.AVAILABLE) return null
+        return try {
+            val text = onDevice.generate(PromptBuilder.triagePrompt(userText))
+            val json = JSONObject(text.substring(text.indexOf('{'), text.lastIndexOf('}') + 1))
+            val light = when (json.optString("verdict").lowercase().trim()) {
+                "light" -> true
+                "heavy" -> false
+                else -> return null // unparsable verdict: skip triage, do not guess
+            }
+            val verdict = NanoTriageVerdict(light, json.optString("reason", "").take(120))
+            log(
+                taskId, "nano-triage",
+                "Nano triage: ${if (light) "light — stays on-device" else "heavy — goes to cloud"}" +
+                    (if (verdict.reason.isNotBlank()) " (${verdict.reason})" else ""),
+            )
+            verdict
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            null // Nano failed mid-triage: skip triage, never fail the task for it
+        }
     }
 
     private suspend fun record(taskId: String, model: String, reason: String, text: String): AIResponse {

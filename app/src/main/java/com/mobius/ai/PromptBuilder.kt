@@ -56,4 +56,85 @@ object PromptBuilder {
         Result data: ${outcome.vars.entries.joinToString("; ") { "${it.key}=${clip(it.value, 200)}" }}
         Rules: state the key facts only (for example the prices found). No preamble, no advice.
     """.trimIndent()
+
+    // -----------------------------------------------------------------------------------------
+    // v6 — Nano triage (L), planning loop (A), orchestration (B). Prompts are consumed by the
+    // cloud model (planning/decompose) or by Nano itself (triage), never by both at once.
+    // -----------------------------------------------------------------------------------------
+
+    /**
+     * Nano triage (L): a TINY classification prompt for Gemini Nano. The answer is one line of
+     * JSON: {"verdict": "light" | "heavy", "reason": "<one short line>"}.
+     * "light" = answerable on-device (short question, simple lookup, no multi-step app work).
+     * "heavy" = needs cloud reasoning or multi-step work across apps.
+     * Kept deliberately small: Nano is a small single-turn model, and this prompt must also
+     * run on Tuan's real device where Nano is UNAVAILABLE (then triage is skipped entirely
+     * and this prompt is never sent — see AIRouter.triage).
+     */
+    fun triagePrompt(userText: String): String = """
+        You classify a phone assistant request as light or heavy. Answer with ONE line of JSON and nothing else.
+        Schema: {"verdict": "light" | "heavy", "reason": "<one short sentence>"}
+        - "light": a short question, a simple lookup, or one quick action on screen.
+        - "heavy": needs reasoning, several steps, comparing things, or working across apps.
+        Request: "${clip(userText, 200)}"
+    """.trimIndent()
+
+    /**
+     * Planning loop (A): one ReAct step. The cloud LLM observes the screen summary + what it
+     * already tried, then picks exactly ONE Layer-1 tool call, or reports done.
+     * Answer with ONE line of JSON and nothing else.
+     * Schema when done: {"done": true, "summary": "<what was achieved, in the user's language>"}
+     * Schema otherwise: {"done": false, "tool": "<tool>", "args": {"<arg>": "<value>"}, "note": "<why this step>"}
+     * Tools (Layer 1 only — no other tool names exist):
+     *   launchApp(package) | tapText(package, text) | type(package, text) | submit(package)
+     *   readScreen(package) | findText(package, text) | extract(package, pattern, max)
+     *   scroll(package) | swipe(direction: up|down|left|right) | back() | home()
+     *   waitMs(ms) | waitForText(package, text, timeoutMs) | code(task)
+     * Rules:
+     * - "code" means "write/run code for this step" — use it ONLY when the step needs code
+     *   written or executed, never for tapping/typing on screen. Its arg is {"task": "..."}.
+     * - Never invent a package name: use the current app package shown below, or the package
+     *   from a previous step's result. If no app is on screen, launch one first.
+     * - Prefer read-only tools (readScreen/findText/extract) to observe; act only on what you
+     *   actually saw on screen. If the screen does not show what you need, say so via done=true
+     *   with a summary of the obstacle instead of guessing taps.
+     * - Never tap anything labelled Send/Kirim or submit a form unless the user's request
+     *   explicitly asks to send something — sending always asks the user first.
+     */
+    fun planningStepPrompt(
+        userText: String,
+        screenSummary: String,
+        history: String,
+        step: Int,
+        maxSteps: Int,
+    ): String = """
+        You operate a phone step by step to fulfil a request. Answer with ONE line of JSON and nothing else.
+        Request: "${clip(userText, 400)}"
+        Step $step of $maxSteps. What you tried so far (most recent last):
+        ${history.ifBlank { "(nothing yet — this is the first step)" }}
+        What is on screen right now:
+        ${clip(screenSummary, 1200)}
+        Pick ONE tool call, or report done. Schema: {"done": false, "tool": "<tool>", "args": {...}, "note": "<why>"}
+        or {"done": true, "summary": "<result or obstacle, in the user's language>"}.
+        Tools: launchApp(package) | tapText(package, text) | type(package, text) | submit(package)
+        | readScreen(package) | findText(package, text) | extract(package, pattern, max)
+        | scroll(package) | swipe(direction) | back() | home() | waitMs(ms) | waitForText(package, text, timeoutMs)
+        | code(task) — only when a step needs code written/run, never for screen actions.
+    """.trimIndent()
+
+    /**
+     * Orchestration (B): split ONE instruction into an ordered list of self-contained jobs.
+     * Answer with ONE line of JSON and nothing else.
+     * Schema: {"jobs": [{"title": "<short title>", "instruction": "<complete instruction for this job alone>"}, ...]}
+     * Rules: each job must make sense on its own (include the app/object it concerns — never
+     * "do the next step" or "continue"). If the request is really ONE job, return exactly one job.
+     * At most 5 jobs; keep titles short.
+     */
+    fun decomposePrompt(userText: String, ctx: TaskContext): String = """
+        You split one phone-assistant request into an ordered list of jobs. Answer with ONE line of JSON and nothing else.
+        Schema: {"jobs": [{"title": "<short title>", "instruction": "<complete instruction for this job alone>"}]}
+        Current app: ${ctx.foregroundApp ?: "unknown"}
+        Request: "${clip(userText, 400)}"
+        Rules: each job self-contained (name the app/object it concerns); one job if the request is a single task; at most 5 jobs.
+    """.trimIndent()
 }

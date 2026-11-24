@@ -33,8 +33,13 @@ data class RoutedIntent(
  */
 class TaskRouter(private val ai: AIRouter, private val registry: SkillRegistry) {
 
-    /** @throws com.mobius.ai.CloudRequiredException when cloud is needed but not allowed. */
-    suspend fun route(taskId: String, userText: String, ctx: TaskContext): RoutedIntent {
+    /**
+     * @throws com.mobius.ai.CloudRequiredException when cloud is needed but not allowed.
+     * @param heavyHint v6 (L): true when Nano triage already judged this request heavy —
+     *   the intent classification then goes to the cloud instead of trying Nano first.
+     *   False (default) keeps the exact v5 behavior.
+     */
+    suspend fun route(taskId: String, userText: String, ctx: TaskContext, heavyHint: Boolean = false): RoutedIntent {
         registry.match(userText)?.let { match ->
             val params = extractSkillParams(taskId, match.skill, userText)
             return RoutedIntent(
@@ -45,7 +50,7 @@ class TaskRouter(private val ai: AIRouter, private val registry: SkillRegistry) 
                 skillParams = params,
             )
         }
-        val response = ai.generate(taskId, PromptBuilder.intentPrompt(userText, ctx))
+        val response = ai.generate(taskId, PromptBuilder.intentPrompt(userText, ctx), heavyHint)
         return parse(response.text, userText)
     }
 

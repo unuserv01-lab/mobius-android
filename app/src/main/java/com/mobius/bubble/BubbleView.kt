@@ -4,6 +4,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -30,9 +31,19 @@ import kotlin.math.abs
 /**
  * The floating bubble: the ENTRY POINT only (P7). It shows the product mark and, below it, a short
  * status chip while a task runs. Touch handling (drag + tap) lives in [DragTouchListener].
+ *
+ * v6 (G): while the auto-scroll loop runs, a visible Stop button sits under
+ * the bubble — tapping it stops the loop. The bubble itself is a separate
+ * overlay window from the panel, so the Stop button stays reachable while
+ * the user reads another app.
  */
 @Composable
-fun BubbleView(status: String?, working: Boolean) {
+fun BubbleView(
+    status: String?,
+    working: Boolean,
+    autoScrolling: Boolean = false,
+    onStopAutoScroll: () -> Unit = {},
+) {
     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(4.dp)) {
         Box(
             modifier = Modifier
@@ -62,6 +73,24 @@ fun BubbleView(status: String?, working: Boolean) {
                     maxLines = 3,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(8.dp),
+                )
+            }
+        }
+        if (autoScrolling) {
+            Spacer(Modifier.height(4.dp))
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = Color(0xEE7C1F1F),
+                modifier = Modifier
+                    .widthIn(max = 220.dp)
+                    .clickable(onClick = onStopAutoScroll),
+            ) {
+                Text(
+                    text = "Stop auto-scroll",
+                    color = Color.White,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
                 )
             }
         }

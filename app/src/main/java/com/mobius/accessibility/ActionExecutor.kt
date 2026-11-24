@@ -45,6 +45,28 @@ class ActionExecutor(
         return node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
     }
 
+    /**
+     * Presses the IME Enter/Search action on the first editable field of [pkg] (submits a
+     * search or a form — the missing primitive that made the Shopee skill never submit).
+     *
+     * How: AccessibilityNodeInfo.ACTION_IME_ENTER (API 31+). There is NO key-event dispatch
+     * API on AccessibilityService — `dispatchKeyEvent` does not exist; only `onKeyEvent`
+     * (the inbound callback) does — so on Android < 12 there is no supported way to send
+     * Enter and we return false honestly instead of faking it. The Throwable catch guards
+     * the ACTION_IME_ENTER field itself, which does not exist on old OS versions
+     * (NoSuchFieldError is an Error, not an Exception).
+     */
+    fun pressEnter(pkg: String): Boolean {
+        if (Build.VERSION.SDK_INT < 31) return false
+        val field = reader.findEditable(pkg) ?: return false
+        return try {
+            val actionId = AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id
+            field.performAction(actionId)
+        } catch (e: Throwable) {
+            false
+        }
+    }
+
     fun scrollForward(node: AccessibilityNodeInfo): Boolean =
         node.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
 
