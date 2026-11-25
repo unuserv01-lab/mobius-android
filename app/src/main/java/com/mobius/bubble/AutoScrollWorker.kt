@@ -3,6 +3,11 @@ package com.mobius.bubble
 import android.content.Context
 import android.os.SystemClock
 import android.util.Log
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.longPreferencesKey
+import androidx.datastore.preferences.preferencesDataStore
 import com.mobius.accessibility.ActionExecutor
 import com.mobius.accessibility.MobiusAccessibilityService
 import com.mobius.accessibility.ScreenReader
@@ -17,18 +22,59 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+
+private val Context.autoScrollDataStore: DataStore<Preferences> by preferencesDataStore(name = "auto_scroll")
+
+/**
+ * v7.9-tambahan — the auto-scroll interval (seconds), owned by the user.
+ *
+ * Own DataStore file ("auto_scroll"), one key. Default 30s (the value the worker
+ * always used before), clamped to 5–120s on read AND write, so a stored value
+ * outside the range can never make the loop swipe absurdly fast or never.
+ * The worker reads it once at [AutoScrollWorker.start]; changing it in Settings
+ * takes effect on the NEXT start (a running loop keeps its interval — stopping
+ * and starting again is one tap on the bubble).
+ */
+class AutoScrollSettings(context: Context) {
+    private val appContext = context.applicationContext
+    private val store: DataStore<Preferences> get() = appContext.autoScrollDataStore
+
+    val intervalSeconds: Flow<Long> = store.data.map {
+        (it[KEY_INTERVAL_SECONDS] ?: DEFAULT_INTERVAL_SECONDS)
+            .coerceIn(MIN_INTERVAL_SECONDS, MAX_INTERVAL_SECONDS)
+    }
+
+    suspend fun getIntervalSeconds(): Long = intervalSeconds.first()
+
+    suspend fun setIntervalSeconds(seconds: Long) {
+        store.edit { it[KEY_INTERVAL_SECONDS] = seconds.coerceIn(MIN_INTERVAL_SECONDS, MAX_INTERVAL_SECONDS) }
+    }
+
+    companion object {
+        /** Default swipe interval: 30 seconds (the value the worker always used before). */
+        const val DEFAULT_INTERVAL_SECONDS = 30L
+        const val MIN_INTERVAL_SECONDS = 5L
+        const val MAX_INTERVAL_SECONDS = 120L
+        private val KEY_INTERVAL_SECONDS = longPreferencesKey("interval_seconds")
+    }
+}
 
 /**
  * v6 workstream G — deterministic auto-scroll loop. NO AI, NO tokens.
  *
- * Every [DEFAULT_INTERVAL_MS] (default 30s) it swipes up once (feed-style:
- * next content scrolls into view) via the Layer 1 [Tool.swipe] primitive.
- * The swipe is a FAST FLING ([FLING_DURATION_MS] = 120ms), NOT the default
+ * Every interval it swipes up once (feed-style: next content scrolls into
+ * view) via the Layer 1 [Tool.swipe] primitive. The interval is NO LONGER
+ * hardcoded: [AutoScrollSettings] (v7.9-tambahan) stores the user's choice in
+ * DataStore (default 30s, range 5–120s) and [start] reads it once when the
+ * loop starts. The swipe is a FAST FLING ([FLING_DURATION_MS] = 120ms), NOT the default
  * 300ms drag: snap pagers (YouTube Shorts, Reels — ViewPager2) need fling
  * velocity to advance; a slow 300ms drag never crosses the velocity
  * threshold, snaps back to the current video, and dispatchGesture still
@@ -55,6 +101,9 @@ class AutoScrollWorker(private val context: Context) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var job: Job? = null
 
+    /** The user's interval choice (DataStore, default 30s). Read once per start. */
+    private val settings = AutoScrollSettings(context)
+
     private val _running = MutableStateFlow(false)
     val running: StateFlow<Boolean> = _running.asStateFlow()
 
@@ -66,16 +115,27 @@ class AutoScrollWorker(private val context: Context) {
      * running. When the service is not bound yet, waits up to [REBIND_WAIT_MS]
      * for it (rebind after an update takes a moment) instead of failing on
      * the first check — and reports the real reason when it never appears.
+     *
+     * v7.9-tambahan: [intervalMs] is an explicit override (null = read the
+     * user's setting from DataStore, default 30s, clamped 5–120s). The read
+     * is suspend, so it happens inside the launched coroutine; [start] itself
+     * stays synchronous and still returns true as soon as the loop is kicked
+     * off (including the "waiting for the service" case, as before).
      */
-    fun start(intervalMs: Long = DEFAULT_INTERVAL_MS): Boolean {
+    fun start(intervalMs: Long? = null): Boolean {
         if (job?.isActive == true) return false
-        val tool = buildTool()
-        if (tool == null) {
-            // v7.7 bug 1 — the service may just be (re)binding. Wait for it
-            // in the background; the chip already says the loop is starting,
-            // and [status] carries the honest outcome either way.
-            _status.value = "Menunggu layanan aksesibilitas…"
-            job = scope.launch {
+        job = scope.launch {
+            // A DataStore read failure must not kill the loop: fall back to
+            // the old hardcoded 30s and keep going (the setting is a
+            // preference, not a safety gate).
+            val ms = (intervalMs ?: runCatching { settings.getIntervalSeconds() * 1000L }
+                .getOrDefault(DEFAULT_INTERVAL_MS))
+                .coerceIn(MIN_INTERVAL_MS, MAX_INTERVAL_MS)
+            val tool = buildTool() ?: run {
+                // v7.7 bug 1 — the service may just be (re)binding. Wait for it
+                // in the background; the chip already says the loop is starting,
+                // and [status] carries the honest outcome either way.
+                _status.value = "Menunggu layanan aksesibilitas…"
                 val deadline = SystemClock.elapsedRealtime() + REBIND_WAIT_MS
                 var live: Tool? = null
                 while (SystemClock.elapsedRealtime() < deadline) {
@@ -83,19 +143,16 @@ class AutoScrollWorker(private val context: Context) {
                     live = buildTool()
                     if (live != null) break
                 }
-                val t = live
-                if (t == null) {
-                    _status.value = "Auto-scroll tidak bisa jalan: ${accessibilityUnavailableText()}"
-                    job = null
-                } else {
-                    runLoop(t, intervalMs)
-                }
+                live
             }
-            return true
+            val t = tool
+            if (t == null) {
+                _status.value = "Auto-scroll tidak bisa jalan: ${accessibilityUnavailableText()}"
+                job = null
+            } else {
+                runLoop(t, ms)
+            }
         }
-        _running.value = true
-        _status.value = "Auto-scroll berjalan."
-        job = scope.launch { runLoop(tool, intervalMs) }
         return true
     }
 
@@ -181,8 +238,11 @@ class AutoScrollWorker(private val context: Context) {
     }
 
     companion object {
-        /** Default swipe interval: 30 seconds. */
+        /** Default swipe interval: 30 seconds (also the DataStore default — see [AutoScrollSettings]). */
         const val DEFAULT_INTERVAL_MS = 30_000L
+        /** Interval clamp, mirroring [AutoScrollSettings] (5–120 detik). */
+        const val MIN_INTERVAL_MS = 5_000L
+        const val MAX_INTERVAL_MS = 120_000L
         /**
          * Auto-scroll stroke duration: 120ms fling. Snap pagers (YouTube
          * Shorts, Reels) only advance on a fast fling; the default 300ms

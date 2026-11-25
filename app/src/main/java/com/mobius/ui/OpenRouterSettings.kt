@@ -61,13 +61,13 @@ fun OpenRouterSection(app: MobiusApp) {
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(
-            strings.setOrTitle,
+            strings.openRouter.setOrTitle,
             style = MaterialTheme.typography.titleMedium,
             color = MaterialTheme.colorScheme.tertiary,
         )
-        Text(strings.setOrNote, style = MaterialTheme.typography.bodySmall)
+        Text(strings.openRouter.setOrNote, style = MaterialTheme.typography.bodySmall)
         Text(
-            if (savedKey.isNotBlank()) strings.setOrKeySaved else strings.setOrKeyEmpty,
+            if (savedKey.isNotBlank()) strings.openRouter.setOrKeySaved else strings.openRouter.setOrKeyEmpty,
             style = MaterialTheme.typography.bodySmall,
             color = if (savedKey.isNotBlank()) {
                 MaterialTheme.colorScheme.tertiary
@@ -79,8 +79,8 @@ fun OpenRouterSection(app: MobiusApp) {
         OutlinedTextField(
             value = keyDraft ?: "",
             onValueChange = { keyDraft = it },
-            label = { Text(strings.setOrKeyLabel) },
-            placeholder = { Text(strings.setOrKeyHint) },
+            label = { Text(strings.openRouter.setOrKeyLabel) },
+            placeholder = { Text(strings.openRouter.setOrKeyHint) },
             singleLine = true,
             visualTransformation = PasswordVisualTransformation(),
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
@@ -90,7 +90,7 @@ fun OpenRouterSection(app: MobiusApp) {
         OutlinedTextField(
             value = modelDraft ?: "",
             onValueChange = { modelDraft = it },
-            label = { Text(strings.setOrModelLabel) },
+            label = { Text(strings.openRouter.setOrModelLabel) },
             placeholder = { Text(AppConfig.DEFAULT_OPENROUTER_MODEL) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
@@ -99,7 +99,7 @@ fun OpenRouterSection(app: MobiusApp) {
         // v7.7 bug 2 — the fallback never runs while the cloud gate is OFF,
         // which looks exactly like "the key is gone". Say so plainly.
         if (cloudAllowed == false) {
-            Text(strings.setOrGateOffWarn, style = MaterialTheme.typography.bodySmall)
+            Text(strings.openRouter.setOrGateOffWarn, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
 
         GradientButton(
@@ -112,7 +112,7 @@ fun OpenRouterSection(app: MobiusApp) {
                     // draft (that is how the key was destroyed: field looked
                     // empty because of the load race, then Save wrote "").
                     if (newKey.isEmpty() && pm.getOpenRouterApiKey().isBlank()) {
-                        savedStatus = strings.setOrKeyNeeded
+                        savedStatus = strings.openRouter.setOrKeyNeeded
                         return@launch
                     }
                     if (newKey.isNotEmpty()) {
@@ -121,10 +121,10 @@ fun OpenRouterSection(app: MobiusApp) {
                         pm.setOpenRouterModel(model)
                     }
                     modelDraft = model
-                    savedStatus = strings.setOrKeySaved
+                    savedStatus = strings.openRouter.setOrKeySaved
                 }
             },
-        ) { Text(strings.gwSave) }
-        savedStatus?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+        ) { Text(strings.gateway.gwSave) }
+        savedStatus?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
     }
 }

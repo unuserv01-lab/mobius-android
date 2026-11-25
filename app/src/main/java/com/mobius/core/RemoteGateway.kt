@@ -14,10 +14,13 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
+import com.mobius.ui.currentStrings
 import org.json.JSONObject
 import java.net.HttpURLConnection
+import java.net.URI
 import java.net.URL
 import java.net.URLEncoder
+import java.util.UUID
 
 private val Context.remoteGatewayDataStore: DataStore<Preferences> by preferencesDataStore(name = "remote_gateway")
 
@@ -42,6 +45,11 @@ private val Context.remoteGatewayDataStore: DataStore<Preferences> by preference
 class RemoteGateway(
     context: Context,
     private val featureFlags: FeatureFlags = FeatureFlags(context),
+    /** Grant store bersama (diisi koordinator dari Orchestrator; bila null,
+     * dibuat sendiri — grant FOREVER tetap jalan, grant CHAT tidak terbagi). */
+    private val approvalGrants: ApprovalGrants? = null,
+    /** Session id chat untuk grant CHAT (dari Orchestrator.chatSessionId). */
+    private val chatSessionId: String = "",
 ) {
     private val appContext = context.applicationContext
     private val store: DataStore<Preferences> get() = appContext.remoteGatewayDataStore
@@ -144,6 +152,174 @@ class RemoteGateway(
         return when (val submitted = submitTaskInternal(text)) {
             is SubmitResult.Success -> {
                 when (val outcome = pollInternal(submitted.taskId, DEFAULT_POLL_TIMEOUT_MS)) {
+                    is PollOutcome.Done -> {
+                        val raw = outcome.result?.takeIf { it.isNotBlank() }
+                            ?: "Tugas selesai di laptop (tanpa hasil teks) — lanjut lokal saja"
+                        // (v8.1) Hasil awaiting_approval dikembalikan sebagai
+                        // pesan manusianya, bukan JSON mentah — pemanggil ini
+                        // tidak punya hook approval, jadi tidak ada dialog;
+                        // tugas ditahan laptop dan tidak ada yang dijalankan.
+                        parseAwaitingApproval(raw)?.message
+                            ?.let { currentStrings.gateway.gwAwaiting.format(it) }
+                            ?: raw
+                    }
+                    is PollOutcome.Failed ->
+                        if (outcome.result.isNullOrBlank()) MSG_TASK_FAILED
+                        else "$MSG_TASK_FAILED_PREFIX: ${outcome.result} — lanjut lokal saja"
+                    is PollOutcome.TimedOut -> MSG_TIMEOUT
+                }
+            }
+            is SubmitResult.Unauthorized -> MSG_UNAUTHORIZED
+            is SubmitResult.Unreachable -> MSG_UNREACHABLE
+        }
+    }
+
+    // ---- v8.1: kartu approval lintas perangkat ----
+
+    /**
+     * Satu aksi yang ditahan laptop (dari `pendingActions[]` hasil extension).
+     * `tier` dibaca dari field `tier` extension ("moderate"/"sensitive");
+     * bila extension lama tidak mengirim tier, default fail-closed:
+     * submit -> SENSITIVE, selain itu MODERATE.
+     */
+    data class RemotePendingAction(
+        val tool: String,
+        val description: String,
+        val tier: RiskTier,
+    )
+
+    /** Permintaan approval dari laptop (hasil `awaiting_approval`). */
+    data class RemoteApprovalRequest(
+        val approvalId: String?,
+        val type: String,
+        val url: String,
+        val pendingActions: List<RemotePendingAction>,
+        val message: String,
+        /** Tier tertinggi dari semua aksi yang ditahan. */
+        val tier: RiskTier,
+        /** Kunci grant per aksi ("browser:<tool>:<host>"). */
+        val actionKeys: List<String>,
+    )
+
+    /**
+     * Parse hasil bridge menjadi [RemoteApprovalRequest]. Null bila teks
+     * bukan JSON `awaiting_approval` (tugas biasa / done / failed).
+     * Fungsi murni (tanpa I/O) — bisa diuji tanpa bridge.
+     */
+    fun parseAwaitingApproval(resultText: String?): RemoteApprovalRequest? {
+        val text = resultText?.trim()?.takeIf { it.startsWith("{") } ?: return null
+        val json = runCatching { JSONObject(text) }.getOrNull() ?: return null
+        if (json.optString("status") != "awaiting_approval") return null
+        val pending = json.optJSONArray("pendingActions")
+        val actions = (0 until (pending?.length() ?: 0)).mapNotNull { i ->
+            val a = pending!!.optJSONObject(i) ?: return@mapNotNull null
+            val tool = a.optString("tool").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            val tier = when (a.optString("tier").lowercase()) {
+                "sensitive" -> RiskTier.SENSITIVE
+                "moderate" -> RiskTier.MODERATE
+                else -> if (tool == "submit") RiskTier.SENSITIVE else RiskTier.MODERATE
+            }
+            RemotePendingAction(tool, a.optString("description", tool), tier)
+        }
+        if (actions.isEmpty()) return null
+        val url = json.optString("url", "")
+        val tier = if (actions.any { it.tier == RiskTier.SENSITIVE }) RiskTier.SENSITIVE else RiskTier.MODERATE
+        return RemoteApprovalRequest(
+            approvalId = json.optString("approvalId").takeIf { it.isNotBlank() },
+            type = json.optString("type", "browser_act"),
+            url = url,
+            pendingActions = actions,
+            message = json.optString("message", currentStrings.gateway.gwAwaitingDefault),
+            tier = tier,
+            actionKeys = actions.map { browserActionKey(it.tool, url) },
+        )
+    }
+
+    /** Kunci grant satu aksi browser: tool + host (bukan URL lengkap, bukan isi ketikan). */
+    fun browserActionKey(tool: String, url: String): String {
+        val host = runCatching { URI(url).host }.getOrNull()?.takeIf { it.isNotBlank() } ?: "any"
+        return "browser:$tool:$host"
+    }
+
+    private fun grants(): ApprovalGrants = approvalGrants ?: ApprovalGrants(appContext)
+
+    /**
+     * Kirim tugas browser ke laptop + tangani putaran approval (v8.1).
+     * Alur: submit -> poll -> bila `awaiting_approval`:
+     *   1. Semua aksi MODERATE + semua grant cocok -> kirim ulang langsung
+     *      (approved=true) tanpa dialog.
+     *   2. Selain itu -> [onApproval] (dialog kartu approval di HP; null =
+     *      tidak ada UI -> kembalikan pesan menunggu yang jujur, tidak ada
+     *      yang dieksekusi di laptop).
+     *   3. Disetujui -> simpan grant bila scope != ONCE (FOREVER hanya bila
+     *      semua aksi MODERATE; SENSITIVE dipaksa turun ke CHAT), kirim ulang
+     *      tugas yang sama + `approved=true` + `approvalId`, poll hasil akhir.
+     *   4. Ditolak -> "Ditolak ..." — laptop tidak menjalankan apa pun.
+     * Hanya SATU putaran approval: bila hasil kedua masih
+     * `awaiting_approval`, gagal jujur. Pesan hasil akhir adalah teks hasil
+     * laptop (atau pesan menunggu/ditolak di atas) — tidak pernah JSON mentah.
+     */
+    suspend fun sendBrowserTaskAndWait(
+        text: String,
+        onApproval: (suspend (RemoteApprovalRequest) -> ApprovalDecision)? = null,
+    ): String {
+        if (!isGatewayEnabled()) return MSG_GATEWAY_OFF
+        val first = runBrowserRound(text) ?: return MSG_UNREACHABLE
+        val awaiting = parseAwaitingApproval(first)
+            ?: return first.ifBlank { "Tugas selesai di laptop (tanpa hasil teks) — lanjut lokal saja" }
+        // 1. Grant MODERATE yang sudah diingat: lewati dialog.
+        if (awaiting.tier == RiskTier.MODERATE) {
+            val allGranted = runCatching {
+                awaiting.actionKeys.all { grants().isGranted(it, chatSessionId) }
+            }.getOrDefault(false)
+            if (allGranted) {
+                return finishApprovedRound(text, awaiting)
+            }
+        }
+        // 2. Dialog (bila ada UI yang menyediakannya).
+        val decision = onApproval?.invoke(awaiting)
+            ?: return currentStrings.gateway.gwAwaiting.format(awaiting.message)
+        if (!decision.approved) {
+            return currentStrings.gateway.gwRejected.format(awaiting.message)
+        }
+        // 3. Simpan grant (FOREVER hanya untuk MODERATE; SENSITIVE -> CHAT).
+        if (decision.grant != GrantScope.ONCE) {
+            val effective = if (awaiting.tier == RiskTier.SENSITIVE && decision.grant == GrantScope.FOREVER) {
+                GrantScope.CHAT
+            } else {
+                decision.grant
+            }
+            runCatching {
+                val g = grants()
+                awaiting.actionKeys.forEach { key ->
+                    g.grant(ApprovalGrant(key, awaiting.tier, effective), chatSessionId)
+                }
+            }
+        }
+        return finishApprovedRound(text, awaiting)
+    }
+
+    /** Kirim ulang tugas yang disetujui (approved=true + approvalId) + poll hasil akhir. */
+    private suspend fun finishApprovedRound(originalText: String, awaiting: RemoteApprovalRequest): String {
+        val approvedText = runCatching {
+            JSONObject(originalText).apply {
+                put("approved", true)
+                put("approvalId", awaiting.approvalId ?: UUID.randomUUID().toString())
+            }.toString()
+        }.getOrNull() ?: return currentStrings.gateway.gwResendFailed
+        val second = runBrowserRound(approvedText) ?: return MSG_UNREACHABLE
+        val stillWaiting = parseAwaitingApproval(second)
+        if (stillWaiting != null) {
+            return currentStrings.gateway.gwStillWaiting.format(stillWaiting.message)
+        }
+        return second.ifBlank { "Tugas selesai di laptop (tanpa hasil teks) — lanjut lokal saja" }
+    }
+
+    /** Satu putaran submit + poll. Null bila submit gagal (unreachable / token salah). */
+    private suspend fun runBrowserRound(taskText: String): String? {
+        return when (val submitted = submitTaskInternal(taskText)) {
+            is SubmitResult.Success -> {
+                when (val outcome = pollInternal(submitted.taskId, DEFAULT_POLL_TIMEOUT_MS)) {
                     is PollOutcome.Done ->
                         outcome.result?.takeIf { it.isNotBlank() }
                             ?: "Tugas selesai di laptop (tanpa hasil teks) — lanjut lokal saja"
@@ -154,7 +330,7 @@ class RemoteGateway(
                 }
             }
             is SubmitResult.Unauthorized -> MSG_UNAUTHORIZED
-            is SubmitResult.Unreachable -> MSG_UNREACHABLE
+            is SubmitResult.Unreachable -> null
         }
     }
 

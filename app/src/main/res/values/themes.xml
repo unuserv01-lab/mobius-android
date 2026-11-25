@@ -4,5 +4,9 @@
         <item name="android:windowBackground">@color/mobius_bg</item>
         <item name="android:statusBarColor">@color/mobius_bg</item>
         <item name="android:navigationBarColor">@color/mobius_bg</item>
+        <!-- MOBIUS is dark-themed (Compose darkColorScheme). Without this,
+             MIUI/HyperOS dark mode force-inverts the app and light text
+             turns black on the dark background. See values-night/themes.xml. -->
+        <item name="android:forceDarkAllowed">false</item>
     </style>
 </resources>

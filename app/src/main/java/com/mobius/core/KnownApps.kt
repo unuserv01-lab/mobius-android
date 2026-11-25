@@ -16,6 +16,10 @@ object KnownApps {
         "youtube" to "com.google.android.youtube",
         "whatsapp" to "com.whatsapp",
         "chrome" to "com.android.chrome",
+        // v8.1-hotfix-4: browser default Tuan (Brave) — package resmi
+        // com.brave.browser (terverifikasi via Play Store). Tanpa ini,
+        // "buka brave" jatuh ke planning loop dan menebak-nebak package.
+        "brave" to "com.brave.browser",
         "gmail" to "com.google.android.gm",
         "maps" to "com.google.android.apps.maps",
         "instagram" to "com.instagram.android",
@@ -75,6 +79,7 @@ object KnownApps {
         "youtube" to "YouTube",
         "whatsapp" to "WhatsApp",
         "chrome" to "Chrome",
+        "brave" to "Brave",
         "gmail" to "Gmail",
         "maps" to "Maps",
         "instagram" to "Instagram",

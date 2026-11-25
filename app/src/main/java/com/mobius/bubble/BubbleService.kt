@@ -21,6 +21,7 @@ import android.view.ViewConfiguration
 import android.view.WindowManager
 import android.widget.FrameLayout
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.ComposeView
 import androidx.core.app.NotificationCompat
@@ -41,6 +42,9 @@ import com.mobius.MobiusApp
 import com.mobius.R
 import com.mobius.ai.VoiceOutput
 import com.mobius.core.AppConfig
+import com.mobius.core.ApprovalDecision
+import com.mobius.core.ApprovalRequest
+import com.mobius.core.GrantScope
 import com.mobius.core.ChatMessage
 import com.mobius.core.FeatureFlag
 import com.mobius.core.TaskHooks
@@ -50,6 +54,7 @@ import com.mobius.ui.LanguageManager
 import com.mobius.ui.LocalStrings
 import com.mobius.ui.MainActivity
 import com.mobius.ui.MobiusTheme
+import com.mobius.ui.currentStrings
 import com.mobius.ui.stringsFor
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -167,10 +172,10 @@ class BubbleService : Service() {
         )
         val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle(strings.notifTitle.format(AppConfig.APP_NAME))
-            .setContentText(strings.notifText)
+            .setContentTitle(strings.bubble.notifTitle.format(AppConfig.APP_NAME))
+            .setContentText(strings.bubble.notifText)
             .setOngoing(true)
-            .addAction(0, strings.notifStop, stop)
+            .addAction(0, strings.bubble.notifStop, stop)
             .build()
         val type = if (Build.VERSION.SDK_INT >= 34) ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE else 0
         ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, type)
@@ -187,6 +192,8 @@ class BubbleService : Service() {
         }
         val root = composeHost {
             CompositionLocalProvider(LocalStrings provides stringsFor(language.value)) {
+                // v8.1 — core (RemoteGateway) reads the same language as the UI.
+                SideEffect { currentStrings = stringsFor(language.value) }
                 MobiusTheme {
                     BubbleView(
                         status = chipText.value,
@@ -231,6 +238,8 @@ class BubbleService : Service() {
         // Rebuilt on every open: a detached ComposeView disposes its composition.
         val root = composeHost {
             CompositionLocalProvider(LocalStrings provides stringsFor(language.value)) {
+                // v8.1 — core (RemoteGateway) reads the same language as the UI.
+                SideEffect { currentStrings = stringsFor(language.value) }
                 MobiusTheme {
                     BubblePanel(
                     state = panelState.value,
@@ -282,6 +291,7 @@ class BubbleService : Service() {
             is PanelState.Confirm -> state.decide(false)
             is PanelState.Plan -> state.decide(false)
             is PanelState.StepConfirm -> state.decide(false)
+            is PanelState.StepConfirmGrant -> state.decide(ApprovalDecision(false, GrantScope.ONCE))
             else -> closePanel()
         }
     }
@@ -294,7 +304,7 @@ class BubbleService : Service() {
         closePanel()
         chipJob?.cancel()
         working.value = true
-        chipText.value = stringsFor(language.value).bubbleWorking
+        chipText.value = stringsFor(language.value).bubble.bubbleWorking
         // v6 (F + G): a new task starts — stop any speech and the scroll loop.
         voiceOutput.stop()
         autoScrollWorker.stop()
@@ -315,12 +325,12 @@ class BubbleService : Service() {
                 // failure outcome matters more than cancellation propagation.
                 // showOutcome clears the status text before opening any panel,
                 // so the status is replaced even if the panel cannot open.
-                val prefix = stringsFor(language.value).bubbleErrorPrefix
+                val prefix = stringsFor(language.value).bubble.bubbleErrorPrefix
                 showOutcome(TaskOutcome(false, prefix + (e.message ?: e.javaClass.simpleName)))
             } catch (e: Exception) {
                 // submit() already converts AI failures into outcomes; this is only a
                 // last-resort guard so a stray exception never kills the bubble service.
-                val prefix = stringsFor(language.value).bubbleErrorPrefix
+                val prefix = stringsFor(language.value).bubble.bubbleErrorPrefix
                 showOutcome(TaskOutcome(false, prefix + (e.message ?: e.javaClass.simpleName)))
             } finally {
                 working.value = false
@@ -353,10 +363,10 @@ class BubbleService : Service() {
         }
         if (autoScrollWorker.start()) {
             closePanel()
-            chipText.value = stringsFor(language.value).bubbleAutoRunning
+            chipText.value = stringsFor(language.value).bubble.bubbleAutoRunning
         } else {
             closePanel()
-            chipText.value = autoScrollWorker.status.value ?: stringsFor(language.value).bubbleAutoFailed
+            chipText.value = autoScrollWorker.status.value ?: stringsFor(language.value).bubble.bubbleAutoFailed
         }
     }
 
@@ -395,6 +405,22 @@ class BubbleService : Service() {
                     openPanel(PanelState.StepConfirm(description) { approved ->
                         closePanel()
                         if (cont.isActive) cont.resume(approved)
+                    })
+                    cont.invokeOnCancellation { mainHandler.post { closePanel() } }
+                }
+            }
+
+        /**
+         * (v8.1) Approval bertier + grant di panel bubble: dialog ApprovalDialog
+         * (badge tier + pilihan ingat). Caller Boolean lama tetap memakai
+         * [confirmStep] di atas; jalur tier SkillRunner/PlanningAgent masuk sini.
+         */
+        override suspend fun confirmStepWithGrant(request: ApprovalRequest): ApprovalDecision =
+            withContext(Dispatchers.Main) {
+                suspendCancellableCoroutine<ApprovalDecision> { cont ->
+                    openPanel(PanelState.StepConfirmGrant(request) { decision ->
+                        closePanel()
+                        if (cont.isActive) cont.resume(decision)
                     })
                     cont.invokeOnCancellation { mainHandler.post { closePanel() } }
                 }

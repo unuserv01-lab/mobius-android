@@ -54,7 +54,7 @@ fun RemoteGatewaySection(app: MobiusApp) {
     var tokenDraft by remember { mutableStateOf("") }
     var draftsLoaded by remember { mutableStateOf(false) }
     var healthStatus by remember { mutableStateOf<String?>(null) }
-    var testTaskText by remember { mutableStateOf(strings.gwTaskDefault) }
+    var testTaskText by remember { mutableStateOf(strings.gateway.gwTaskDefault) }
     var testResult by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
 
@@ -69,14 +69,14 @@ fun RemoteGatewaySection(app: MobiusApp) {
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(
-            strings.gwTitle,
+            strings.gateway.gwTitle,
             style = MaterialTheme.typography.titleMedium,
             color = MaterialTheme.colorScheme.tertiary,
         )
-        Text(strings.gwDesc, style = MaterialTheme.typography.bodySmall)
+        Text(strings.gateway.gwDesc, style = MaterialTheme.typography.bodySmall)
         if (!gatewayEnabled) {
             Text(
-                strings.gwDisabled,
+                strings.gateway.gwDisabled,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
             )
@@ -85,56 +85,56 @@ fun RemoteGatewaySection(app: MobiusApp) {
         OutlinedTextField(
             value = addressDraft,
             onValueChange = { addressDraft = it },
-            label = { Text(strings.gwAddressLabel) },
+            label = { Text(strings.gateway.gwAddressLabel) },
             placeholder = { Text(RemoteGateway.DEFAULT_BRIDGE_ADDRESS) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
-        Text(strings.gwAddressExample.format(RemoteGateway.DEFAULT_BRIDGE_ADDRESS), style = MaterialTheme.typography.bodySmall)
+        Text(strings.gateway.gwAddressExample.format(RemoteGateway.DEFAULT_BRIDGE_ADDRESS), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
         OutlinedTextField(
             value = tokenDraft,
             onValueChange = { tokenDraft = it },
-            label = { Text(strings.gwTokenLabel) },
+            label = { Text(strings.gateway.gwTokenLabel) },
             singleLine = true,
             visualTransformation = PasswordVisualTransformation(),
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
             modifier = Modifier.fillMaxWidth(),
         )
-        Text(strings.gwTokenDesc, style = MaterialTheme.typography.bodySmall)
+        Text(strings.gateway.gwTokenDesc, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             GradientButton(
                 onClick = {
                     scope.launch {
                         gateway.saveSettings(addressDraft, tokenDraft)
-                        healthStatus = strings.gwSaved
+                        healthStatus = strings.gateway.gwSaved
                     }
                 },
-            ) { Text(strings.gwSave) }
+            ) { Text(strings.gateway.gwSave) }
             OutlinedButton(
                 enabled = gatewayEnabled && !busy,
                 onClick = {
                     scope.launch {
                         busy = true
-                        healthStatus = strings.gwTesting
+                        healthStatus = strings.gateway.gwTesting
                         gateway.saveSettings(addressDraft, tokenDraft)
                         healthStatus = if (gateway.health()) {
-                            strings.gwReachable
+                            strings.gateway.gwReachable
                         } else {
-                            strings.gwUnreachable
+                            strings.gateway.gwUnreachable
                         }
                         busy = false
                     }
                 },
-            ) { Text(strings.gwTest) }
+            ) { Text(strings.gateway.gwTest) }
         }
-        healthStatus?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+        healthStatus?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
 
         OutlinedTextField(
             value = testTaskText,
             onValueChange = { testTaskText = it },
-            label = { Text(strings.gwTaskLabel) },
+            label = { Text(strings.gateway.gwTaskLabel) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
@@ -143,13 +143,13 @@ fun RemoteGatewaySection(app: MobiusApp) {
             onClick = {
                 scope.launch {
                     busy = true
-                    testResult = strings.gwSending
+                    testResult = strings.gateway.gwSending
                     gateway.saveSettings(addressDraft, tokenDraft)
                     testResult = gateway.sendTaskAndWait(testTaskText)
                     busy = false
                 }
             },
-        ) { Text(strings.gwSendTask) }
-        testResult?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+        ) { Text(strings.gateway.gwSendTask) }
+        testResult?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
     }
 }

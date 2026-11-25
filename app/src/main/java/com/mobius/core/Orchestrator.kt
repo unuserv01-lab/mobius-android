@@ -1,6 +1,7 @@
 package com.mobius.core
 
 import android.content.Context
+import android.os.SystemClock
 import com.mobius.accessibility.ActionExecutor
 import com.mobius.accessibility.MobiusAccessibilityService
 import com.mobius.accessibility.ScreenReader
@@ -39,6 +40,18 @@ interface TaskHooks {
     suspend fun confirmPlan(skillName: String, steps: List<String>): Boolean
     /** (v5) Asks approval for one irreversible step (ActionGate); true = run the step. */
     suspend fun confirmStep(description: String): Boolean
+
+    /**
+     * (v8.1) Asks approval for one gated step WITH tier + grant choice.
+     * Default: delegates to the old [confirmStep] (grant = ONCE), so the
+     * existing HomeScreen / bubble implementations keep working unchanged —
+     * they show their Boolean dialog and every approval is once-only.
+     * A UI that implements this (see ui/ApprovalCard.kt) shows the tier
+     * badge + "ingat: sekali / chat ini / selamanya" choices; SENSITIVE
+     * never offers FOREVER (enforced again in [Orchestrator.requestApproval]).
+     */
+    suspend fun confirmStepWithGrant(request: ApprovalRequest): ApprovalDecision =
+        ApprovalDecision(confirmStep(request.description), GrantScope.ONCE)
 }
 
 data class TaskOutcome(val success: Boolean, val message: String)
@@ -76,6 +89,91 @@ class Orchestrator(
     private val skillRunner: SkillRunner,
 ) {
     private val featureFlags = FeatureFlags(context)
+
+    // --- v8.1: approval bertier + grants yang diingat ---
+    /** Grants yang diingat di perangkat ini (FOREVER di DataStore, CHAT di memori). */
+    val approvalGrants = ApprovalGrants(context)
+
+    /**
+     * Id sesi chat untuk scope CHAT. Satu id per instance Orchestrator
+     * (= per proses aplikasi); grant CHAT hangus saat proses mati atau saat
+     * [endChatSession] dipanggil (tombol chat baru). Follow-up: teruskan id
+     * chat asli dari HomeScreen saat tombol chat baru ditekan.
+     */
+    val chatSessionId: String = UUID.randomUUID().toString().take(8)
+
+    /** Mulai chat baru: semua grant "chat ini" hangus. */
+    fun endChatSession() {
+        approvalGrants.endChatSession()
+    }
+
+    /**
+     * Satu-satunya jalan approval di Orchestrator (v8.1). Urutan:
+     *   1. MODERATE + grant cocok (FOREVER / CHAT sesi ini) -> disetujui
+     *      tanpa dialog.
+     *   2. Selain itu -> dialog via [TaskHooks.confirmStepWithGrant].
+     *   3. Bila disetujui dengan scope != ONCE -> simpan grant; FOREVER
+     *      untuk SENSITIVE dipaksa turun ke CHAT (tidak pernah disimpan
+     *      selamanya — pertahanan kedua setelah ApprovalGrants.grant()).
+     * Fail closed: dialog gagal / hook tidak ada -> ditolak.
+     */
+    suspend fun requestApproval(hooks: TaskHooks, request: ApprovalRequest): ApprovalDecision {
+        val key = request.actionKey
+        if (request.tier == RiskTier.MODERATE && key != null) {
+            val granted = runCatching { approvalGrants.isGranted(key, chatSessionId) }.getOrDefault(false)
+            if (granted) return ApprovalDecision(true, GrantScope.ONCE)
+        }
+        val decision = try {
+            hooks.confirmStepWithGrant(request)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            ApprovalDecision(false, GrantScope.ONCE)
+        }
+        if (decision.approved && decision.grant != GrantScope.ONCE && key != null) {
+            val effective = if (request.tier == RiskTier.SENSITIVE && decision.grant == GrantScope.FOREVER) {
+                GrantScope.CHAT // SENSITIVE tidak boleh selamanya — paksa turun.
+            } else {
+                decision.grant
+            }
+            runCatching {
+                approvalGrants.grant(ApprovalGrant(key, request.tier, effective), chatSessionId)
+            }
+            return decision.copy(grant = effective)
+        }
+        return decision
+    }
+
+    /**
+     * Adapter Boolean untuk SkillRunner / PlanningAgent (v8.1).
+     * Kedua pemanggil itu (bukan milik workstream ini — JANGAN sentuh)
+     * hanya meneruskan deskripsi String, tanpa tier/actionKey. Jadi semua
+     * NEEDS_APPROVAL yang sampai ke sini diperlakukan sebagai SENSITIVE:
+     * benar untuk kasus lama (tulis Google / risk irreversible / timpa file
+     * — ketiganya SENSITIVE), dan fail-closed untuk MODERATE (tap/ketik/buka
+     * aplikasi kini NEEDS_APPROVAL di gate, tapi sampai wiring tier di
+     * SkillRunner/PlanningAgent masuk — lihat laporan v8.1 — ia ditanya
+     * tiap kali sebagai SENSITIVE dan tidak pernah diingat; aman, hanya
+     * lebih cerewet). Satu-satunya efek samping: dialog tier di UI lama
+     * menampilkan label SENSITIVE untuk langkah MODERATE sampai wiring itu
+     * masuk — dicatat di laporan sebagai batasan yang diketahui.
+     */
+    private fun tieredConfirmStep(hooks: TaskHooks): suspend (String) -> Boolean = { description ->
+        requestApproval(
+            hooks,
+            ApprovalRequest(description, RiskTier.SENSITIVE, null, "local"),
+        ).approved
+    }
+
+    /**
+     * (v8.1-integrasi) Adapter grant untuk SkillRunner / PlanningAgent: meneruskan
+     * tier + actionKey asli dari [GateResult] ke [requestApproval], supaya grant
+     * MODERATE bisa diingat (sekali / chat ini / selamanya) dan SENSITIVE selalu
+     * ditanya ulang dengan cap CHAT. Adapter Boolean lama di atas tetap dipakai
+     * sebagai fallback bila caller belum meneruskan hook grant.
+     */
+    private fun tieredConfirmStepWithGrant(hooks: TaskHooks): suspend (ApprovalRequest) -> ApprovalDecision =
+        { request -> requestApproval(hooks, request) }
 
     /** v5 single-task lock — used ONLY when PARALLEL_WORKERS is OFF. */
     private val busy = Mutex()
@@ -174,6 +272,14 @@ class Orchestrator(
         hooks.status("Understanding your request...")
         val ctx = contextManager.snapshot(taskId, text)
 
+        // (v8.1-hotfix-4) Jalur lokal "buka aplikasi" — SEBELUM triage/routing,
+        // supaya perintah lokal tidak pernah memakan panggilan model atau
+        // dicuri skill laptop. parseLocalLaunch mengembalikan null bila ini
+        // bukan perintah buka-aplikasi-lokal; routing lama jalan seperti biasa.
+        parseLocalLaunch(text)?.let { packageName ->
+            return runLocalLaunch(taskId, text, packageName, hooks)
+        }
+
         // (L) Nano triage — skipped when the flag is OFF or Nano is unavailable.
         val triageOn = featureFlags.isEnabled(FeatureFlag.NANO_TRIAGE).first()
         val triage = if (triageOn) {
@@ -242,6 +348,140 @@ class Orchestrator(
         return dispatchAgent(taskId, text, ctx, intent, hooks)
     }
 
+    // --- v8.1-hotfix-4: jalur lokal "buka aplikasi" (deterministik, tanpa model, tanpa bridge) ---
+    //
+    // Keluhan Tuan (26 Nov 2026): "buka YouTube" / "bukaa brave" malah dijalankan
+    // sebagai skill "Buka di laptop" — padahal buka aplikasi DI HP. Dua lapis
+    // perbaikan, keduanya di sini (bukan di TaskRouter: router tidak punya Tool /
+    // AppRegistry / hook approval, dan tugasnya adalah klasifikasi intent):
+    //   1. SkillRegistry.match() didedupe (kata generik sekali per skill) — lihat
+    //      file itu; tanpa dedupe, "buka" saja sudah skor 3 untuk skill laptop.
+    //   2. Jalur ini, SEBELUM routing: "buka <nama aplikasi persis>" dibuka DI HP
+    //      via launchApp terverifikasi. Tanpa panggilan model, tanpa bridge.
+    // Penempatan di executeSingle (bukan skill JSON baru): sebuah skill butuh
+    // parameter `package` yang diisi LLM/heuristic — keduanya tidak bisa
+    // me-resolve nama aplikasi ke package secara deterministik; SkillRunner juga
+    // tidak me-resolve nama (hanya PlanningAgent yang memakai KnownApps, dan itu
+    // pun setelah klasifikasi model). Jalur ini memakai KnownApps.resolvePackage
+    // NAMA PERSIS (tanpa tebakan dari teks): kandidat kabur ("jam 7",
+    // "youtube.com", nama yang tidak dikenal) jatuh ke jalur lama (planning
+    // loop / skill laptop) seperti sebelumnya.
+
+    /**
+     * Pure parse: "buka <nama aplikasi>" -> package, atau null bila ini BUKAN
+     * perintah buka-aplikasi-lokal (lanjut ke routing normal).
+     * - Penanda laptop ("di laptop"/"di komputer"/"di pc"/"on laptop"/"on pc")
+     *   selalu menang: perintah itu ke skill bridge, bukan jalur ini.
+     * - Kata kerja pembuka: "buka" (toleran typo "bukaa"/"bukaaa"), "bukakan",
+     *   "open", dengan awalan sopan "tolong " opsional.
+     * - Nama harus PERSIS nama/alias KnownApps ("youtube", "yt", "google calendar",
+     *   "brave"); situs/URL (mengandung '.' atau '/') bukan jalur ini.
+     */
+    private fun parseLocalLaunch(text: String): String? {
+        val t = text.trim().lowercase().removePrefix("tolong ").trim()
+        if (LAPTOP_MARKERS.any { it in t }) return null
+        val name = OPEN_VERB_REGEX.find(t)?.groupValues?.getOrNull(2)?.trim().orEmpty()
+            .removePrefix("aplikasi ").trim()
+        if (name.isEmpty()) return null
+        if ('.' in name || '/' in name || name.startsWith("http")) return null
+        // resolvePackage TANPA taskText = hanya nama/alias persis; "jam 7" atau
+        // "youtube.com" tidak menebak — jatuh ke jalur lama.
+        return KnownApps.resolvePackage(name)
+    }
+
+    /**
+     * Menjalankan satu local launch: gate -> registry -> approval MODERATE ->
+     * launch terverifikasi di bawah screen lock. TIDAK PERNAH melempar (kecuali
+     * cancellation); setiap penolakan dijawab langsung dengan alasannya, tanpa
+     * panggilan model. Trail dicatat agar muncul di layar Log seperti skill.
+     *
+     * Urutan gate (sama seperti SkillRunner/PlanningAgent):
+     *   1. ActionGate.check — aplikasi sensitif (bank/fintech) DENIED; tidak ada
+     *      approval yang bisa mengesampingkannya (hard floor).
+     *   2. AppRegistry (allowlist Tuan) — toggle OFF = DENIED dengan pesan ke mana
+     *      mengaktifkannya. Registry tidak pernah mengalahkan aturan 1.
+     *   3. Approval MODERATE pertama kali (bisa diingat sekali/chat ini/selamanya
+     *      via grants — tier + actionKey yang sama dengan launchApp planning loop);
+     *      grant yang tersimpan melewati dialog. Penolakan = "Dibatalkan."
+     *   4. Tool.launchApp (terverifikasi: executor hanya true bila package terlihat
+     *      di foreground; ActionExecutor juga mengecek registry sekali lagi
+     *      sebagai enforcement terakhir).
+     * Tanpa Tool (aksesibilitas mati) -> pesan a11y yang jujur, bukan error model.
+     */
+    private suspend fun runLocalLaunch(
+        taskId: String,
+        text: String,
+        packageName: String,
+        hooks: TaskHooks,
+    ): TaskOutcome {
+        val display = KnownApps.displayName(packageName) ?: packageName
+        val gateDecisions = mutableListOf<GateDecisionRecord>()
+        val steps = mutableListOf<StepResult>()
+
+        suspend fun trailAndFinish(outcome: TaskOutcome): TaskOutcome {
+            // Best-effort: trail gagal tidak boleh menggagalkan jawaban ke Tuan.
+            runCatching {
+                val ttl = permissions.memoryTtlSeconds.first()
+                memory.recordTrail(taskId, "Buka aplikasi", text, steps, gateDecisions, null, ttl)
+            }
+            return finish(taskId, "LocalLaunch", text, outcome, emptyList())
+        }
+
+        // 1. Sensitive deny-list (murni, tanpa Tool).
+        val gate = ActionGate.check("launchApp", packageName, null)
+        if (gate.decision == GateDecision.DENIED) {
+            gateDecisions += GateDecisionRecord(0, "launchApp", packageName, GateDecision.DENIED, null, gate.reason)
+            steps += StepResult(0, "launchApp", false, gate.reason, 0, VerificationStatus.FAILED)
+            return trailAndFinish(TaskOutcome(false, gate.reason))
+        }
+        // 2. Registry allowlist Tuan.
+        val allowed = runCatching { AppRegistry(context).isAllowed(packageName) }.getOrDefault(false)
+        val regGate = ActionGate.checkRegistry(packageName, allowed, display)
+        if (regGate.decision == GateDecision.DENIED) {
+            gateDecisions += GateDecisionRecord(0, "launchApp", packageName, GateDecision.DENIED, null, regGate.reason)
+            steps += StepResult(0, "launchApp", false, regGate.reason, 0, VerificationStatus.FAILED)
+            return trailAndFinish(TaskOutcome(false, regGate.reason))
+        }
+        // 3. Tanpa Tool, jawab pesan a11y (jangan lempar ke model yang juga butuh Tool).
+        val tool = buildTool()
+        if (tool == null) {
+            val msg = accessibilityUnavailableMessage()
+            steps += StepResult(0, "launchApp", false, msg, 0, VerificationStatus.FAILED)
+            return trailAndFinish(TaskOutcome(false, msg))
+        }
+        // 4. Approval MODERATE (pertama kali; bisa diingat). gate.tier/actionKey
+        //    berasal dari klasifikasi yang sama dengan planning loop.
+        val decision = requestApproval(
+            hooks,
+            ApprovalRequest(
+                description = "Buka aplikasi $display?",
+                tier = gate.tier,
+                actionKey = gate.actionKey,
+                origin = "local",
+            ),
+        )
+        gateDecisions += GateDecisionRecord(
+            0, "launchApp", packageName, gate.decision,
+            if (decision.approved) "approved" else "rejected", gate.reason,
+        )
+        if (!decision.approved) {
+            steps += StepResult(0, "launchApp", false, "Dibatalkan.", 0, VerificationStatus.FAILED)
+            return trailAndFinish(TaskOutcome(false, "Dibatalkan."))
+        }
+        // 5. Launch terverifikasi di bawah screen lock.
+        hooks.status("Membuka $display...")
+        val started = SystemClock.elapsedRealtime()
+        val result = screenLock.withLock { tool.launchApp(packageName) }
+        val durationMs = SystemClock.elapsedRealtime() - started
+        steps += StepResult(0, "launchApp", result.success, result.message, durationMs, result.verification)
+        val outcome = if (result.success) {
+            TaskOutcome(true, "Membuka $display.")
+        } else {
+            TaskOutcome(false, result.message.ifBlank { "Tidak bisa membuka $display." })
+        }
+        return trailAndFinish(outcome)
+    }
+
     /**
      * (B) Runs the plan's jobs in order (each through [executeSingle], so every job gets
      * the normal skill / planning-loop / agent dispatch), then reports the combined result
@@ -308,7 +548,8 @@ class Orchestrator(
             val tool = buildTool()
             val agent = PlanningAgent(
                 taskId, tools, tool, screenLock,
-                onConfirmStep = hooks::confirmStep,
+                onConfirmStep = tieredConfirmStep(hooks),
+                onConfirmStepWithGrant = tieredConfirmStepWithGrant(hooks),
                 codeExecutor = buildCodeExecutor(taskId),
                 toolUnavailableMessage = if (tool == null) accessibilityUnavailableMessage() else null,
             )
@@ -385,12 +626,19 @@ class Orchestrator(
     private suspend fun runSkill(taskId: String, intent: RoutedIntent, userText: String, hooks: TaskHooks): SkillOutcome {
         val skill = intent.skillId?.let { skillRegistry.byId(it) }
             ?: return SkillOutcome(false, false, "Skill not found.", emptyList(), emptyMap())
+        // (v7.9-verifikasi) Tool layar boleh null: skill yang SEMUA langkahnya
+        // tool Google API (jaringan, tanpa layar) jalan tanpa layanan
+        // aksesibilitas. Skill yang butuh layar tetap ditolak dengan pesan
+        // yang sama seperti sebelumnya bila layanannya mati.
         val tool = buildTool()
-            ?: return SkillOutcome(
+        val needsScreenTool = skill.steps.any { it.tool !in SkillRunner.GOOGLE_API_TOOLS }
+        if (tool == null && needsScreenTool) {
+            return SkillOutcome(
                 false, false,
                 accessibilityUnavailableMessage(),
                 emptyList(), emptyMap(),
             )
+        }
         // ITEM 2 (v5) — plan card: show the resolved steps BEFORE anything runs. Batal means
         // nothing runs at all; the cancellation is recorded in the audit trail.
         hooks.status("Showing plan for ${skill.name}...")
@@ -407,12 +655,14 @@ class Orchestrator(
         }
         hooks.status("Running ${skill.name}...")
         val outcome = try {
-            skillRunner.run(skill, intent.skillParams, tool, hooks::status, ActionGate, hooks::confirmStep)
+            skillRunner.run(skill, intent.skillParams, tool, hooks::status, ActionGate, tieredConfirmStep(hooks), tieredConfirmStepWithGrant(hooks))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             SkillOutcome(false, false, "Something went wrong: ${e.message ?: e.javaClass.simpleName}", emptyList(), emptyMap())
         }
+        // (v8.1) Registry SQLite: hitung pemakaian skill. DB gagal = run tetap jalan.
+        runCatching { skillRegistry.recordUse(skill.id) }
         persistTrail(taskId, skill, userText, outcome.steps, outcome.gateDecisions, "confirmed")
         if (!skill.summarize || !outcome.success) return outcome
         // LLM summarizes the structured result; any AI failure falls back to the raw outcome.
@@ -437,10 +687,10 @@ class Orchestrator(
             .getOrDefault(AppLanguage.ID)
         val s = stringsFor(language)
         return when (permissions.accessibilityState()) {
-            AccessibilityState.OFF -> s.a11yOffMsg.format(AppConfig.APP_NAME)
-            AccessibilityState.ENABLED_NOT_RUNNING -> s.a11yNotRunningMsg.format(AppConfig.APP_NAME)
+            AccessibilityState.OFF -> s.capFix.a11yOffMsg.format(AppConfig.APP_NAME)
+            AccessibilityState.ENABLED_NOT_RUNNING -> s.capFix.a11yNotRunningMsg.format(AppConfig.APP_NAME)
             // Unreachable when the tool really is null; fall back to the honest mismatch text.
-            AccessibilityState.LIVE -> s.a11yNotRunningMsg.format(AppConfig.APP_NAME)
+            AccessibilityState.LIVE -> s.capFix.a11yNotRunningMsg.format(AppConfig.APP_NAME)
         }
     }
 
@@ -507,6 +757,10 @@ class Orchestrator(
      * Human-readable plan lines: "1. launchApp — package=com.shopee.id". $params are resolved
      * best-effort (an unresolvable reference is shown as-is, never hidden). Irreversible
      * steps are marked so the user sees the approval coming.
+     * (v8.1) Tiap langkah juga membawa label tier dari [ActionGate.check], jadi
+     * pengguna melihat SEBELUM run langkah mana yang akan minta persetujuan
+     * (MODERATE: pertama kali; SENSITIVE: selalu) — bukan hanya yang
+     * risk="irreversible".
      */
     private fun describePlan(skill: Skill, params: Map<String, String>): List<String> {
         val vars = LinkedHashMap<String, String>()
@@ -515,7 +769,13 @@ class Orchestrator(
         }
         return skill.steps.mapIndexed { i, step ->
             val args = step.args.entries.joinToString(", ") { (k, v) -> "$k=${resolveBestEffort(v, vars)}" }
-            val risk = if (step.risk == ActionGate.RISK_IRREVERSIBLE) " [tak terbalikkan]" else ""
+            val pkg = step.args["package"]?.let { resolveBestEffort(it, vars) }
+            val tier = ActionGate.check(step.tool, pkg, step.risk).tier
+            val risk = when (tier) {
+                RiskTier.SENSITIVE -> " [sensitif — selalu minta persetujuan]"
+                RiskTier.MODERATE -> " [perlu persetujuan pertama kali]"
+                RiskTier.SAFE -> ""
+            }
             "${i + 1}. ${step.tool}" + (if (args.isNotEmpty()) " — $args" else "") + risk
         }
     }
@@ -571,5 +831,9 @@ class Orchestrator(
         val PLAN_REF = Regex("\\\$([A-Za-z0-9_.]+)")
         /** (E) Worker pool size, spec E default. */
         const val MAX_WORKERS = 2
+        /** (v8.1-hotfix-4) Kata yang memindahkan tugas ke laptop — selalu menang atas jalur lokal. */
+        val LAPTOP_MARKERS = listOf("di laptop", "di komputer", "di pc", "on laptop", "on pc")
+        /** (v8.1-hotfix-4) "buka"/"bukaa…"/"bukakan"/"open" + nama. Grup 2 = nama aplikasi. */
+        val OPEN_VERB_REGEX = Regex("^(bukakan|buka+|open)\\s+(.+)$")
     }
 }

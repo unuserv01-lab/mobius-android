@@ -1,0 +1,39 @@
+{
+    "description": "Kirim email lewat Gmail. Selalu minta persetujuan sebelum mengirim (ActionGate).",
+    "id": "google_gmail_send",
+    "maxSteps": 5,
+    "name": "Kirim email (Gmail)",
+    "params": [
+        {
+            "name": "to",
+            "required": true
+        },
+        {
+            "name": "subject",
+            "required": true
+        },
+        {
+            "name": "body",
+            "required": true
+        }
+    ],
+    "steps": [
+        {
+            "args": {
+                "body": "$body",
+                "subject": "$subject",
+                "to": "$to"
+            },
+            "risk": "irreversible",
+            "tool": "gmailSend"
+        }
+    ],
+    "summarize": false,
+    "timeoutMs": 60000,
+    "triggers": [
+        "email ke",
+        "kirim email",
+        "kirim email ke",
+        "kirim surel"
+    ]
+}

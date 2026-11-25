@@ -1,6 +1,9 @@
 package com.mobius.core
 
 import android.accessibilityservice.AccessibilityService
+import android.content.ActivityNotFoundException
+import android.content.Intent
+import android.provider.AlarmClock
 import com.mobius.accessibility.ActionExecutor
 import com.mobius.accessibility.ScreenReader
 import kotlinx.coroutines.delay
@@ -18,11 +21,28 @@ import kotlinx.coroutines.flow.first
  * JSON recipes that compose these primitives). Adding a primitive means editing this file and
  * the closed implementation below.
  */
+/**
+ * (v8.1) The result of one tool call — now with verification attached.
+ * `success` alone only means "the action was dispatched / the call returned
+ * data". Whether the intended EFFECT actually happened is [verification]:
+ * only [VerificationStatus.VERIFIED] counts as confirmed. [SkillRunner]'s
+ * done-gate ([OutcomeGate]) refuses to report DONE while any mutating step
+ * is not VERIFIED — that is what stops the 26 Nov 2026 false-success bug
+ * ("Alarm berhasil diatur" with no alarm set) from recurring.
+ *
+ * [evidence] is the short read-back proof shown to the user/audit trail
+ * (e.g. "07:00 terlihat di daftar alarm", "exit code 0", "id pesan Gmail").
+ * [notPossible] marks a DETERMINISTIC blocker (bad input, missing app,
+ * unsupported Android version): retrying the same call cannot help.
+ */
 data class ToolResult(
     val success: Boolean,
     val message: String = "",
     /** Structured data the caller may store, e.g. {"0": "Rp12.000", "1": "Rp15.500", "count": "2"}. */
     val data: Map<String, String> = emptyMap(),
+    val verification: VerificationStatus = VerificationStatus.UNVERIFIED,
+    val evidence: String? = null,
+    val notPossible: Boolean = false,
 )
 
 interface Tool {
@@ -73,6 +93,21 @@ interface Tool {
     /** Waits up to [timeoutMs] for [text] to appear on screen. */
     suspend fun waitForText(packageName: String, text: String, timeoutMs: Long): ToolResult
 
+    // --- v8.1 alarm skill (Layer 1, closed primitive) ---
+    // Sets an alarm through the SYSTEM clock app via AlarmClock.ACTION_SET_ALARM
+    // (the public intent; the Clock app owns the alarm, MOBIUS never touches
+    // AlarmManager directly) and then READS BACK the alarm list to verify the
+    // alarm is really there. Firing the intent alone is never reported as
+    // success: if the time is not seen in the alarm list the result is
+    // success=true + verification=UNVERIFIED ("belum terverifikasi") and the
+    // done-gate turns the run into PARTIAL — the words "Alarm berhasil
+    // diatur" are never produced without read-back evidence. Never retried
+    // (the skill sets maxRetries=0): a retry could create a duplicate alarm.
+    // Needs Manifest.permission.SET_ALARM (normal permission, auto-granted at
+    // install — see AndroidManifest.xml, v8.1). The Clock app must be allowed
+    // in the app registry (com.android.deskclock is a KnownApps default-ON).
+    suspend fun setAlarm(packageName: String, hour: Int, minute: Int, message: String): ToolResult
+
     // --- v6 CodeAgent (Layer 1, closed primitives — see ScopedFileStore / CommandRunner) ---
     // All three are gated by the CODE_AGENT feature flag AND by ActionGate; when the flag
     // is OFF they deny with a clear message and no code runs at all (v5 behavior).
@@ -112,31 +147,87 @@ class AccessibilityTools(
     override suspend fun launchApp(packageName: String): ToolResult = resultOf(
         okMessage = "Opened $packageName.",
         failMessage = "Could not open $packageName.",
+        // v7.8: the executor only returns true after observing the package in
+        // the foreground — the read-back IS the verification.
+        okVerification = VerificationStatus.VERIFIED,
+        okEvidence = "$packageName terlihat di foreground.",
     ) { executor.launchApp(packageName) }
 
-    override suspend fun tapText(packageName: String, text: String, exact: Boolean): ToolResult = resultOf(
-        okMessage = "Tapped \"$text\".",
-        failMessage = "Could not find \"$text\" on screen.",
-    ) { executor.tapByText(packageName, text, exact) }
-
-    override suspend fun type(packageName: String, text: String): ToolResult = try {
-        val field = reader.findEditable(packageName)
-            ?: return ToolResult(false, "No text field on screen to type into.")
-        if (executor.setText(field, text)) ToolResult(true, "Typed text.")
-        else ToolResult(false, "The text field did not accept the text.")
+    /**
+     * (v8.1) Tap + read-back: snapshot layar sebelum tap, tunggu layar stabil,
+     * bandingkan. Tap yang tidak mengubah apa pun = NO_EFFECT + success=false
+     * (BUKAN sukses — dulu tap yang "terkirim" tapi tak berefek dilaporkan
+     * "Tapped ..." seolah berhasil).
+     */
+    override suspend fun tapText(packageName: String, text: String, exact: Boolean): ToolResult = try {
+        val before = ScreenSnapshot.take(reader, packageName)
+        if (!executor.tapByText(packageName, text, exact)) {
+            // Target tidak ada DI LAYAR SAAT INI — bisa karena layar belum
+            // termuat, jadi ini FAILED biasa (bukan notPossible): retry /
+            // observe ulang masih masuk akal.
+            ToolResult(false, "Could not find \"$text\" on screen.", verification = VerificationStatus.FAILED)
+        } else {
+            Verification.verifyScreenChanged(
+                reader, packageName, before,
+                okMessage = "Tapped \"$text\".",
+                noEffectMessage = "Mengetuk \"$text\" tidak mengubah layar (tombol mungkin tidak merespons) — bukan sukses.",
+            )
+        }
     } catch (e: Exception) {
-        ToolResult(false, e.message ?: e.javaClass.simpleName)
+        ToolResult(false, e.message ?: e.javaClass.simpleName, verification = VerificationStatus.FAILED)
     }
 
-    override suspend fun submit(packageName: String): ToolResult = try {
-        if (executor.pressEnter(packageName)) ToolResult(true, "Submitted.")
-        else ToolResult(
-            false,
-            "Could not submit: no focused text field, or the field did not accept Enter " +
-                "(needs Android 12+).",
-        )
+    /**
+     * (v8.1) Type + read-back (pola Mika UnseenField): baca-balik isi kolom
+     * sesudah setText dan bandingkan dengan teks yang diminta. Tidak berubah
+     * = NO_EFFECT; berubah tapi isinya lain (mis. auto-format) = UNVERIFIED
+     * + gagal jujur, bukan "Typed text." palsu.
+     */
+    override suspend fun type(packageName: String, text: String): ToolResult = try {
+        val field = reader.findEditable(packageName)
+            ?: return ToolResult(false, "No text field on screen to type into.", verification = VerificationStatus.FAILED)
+        val beforeText = field.text?.toString().orEmpty()
+        if (!executor.setText(field, text)) {
+            return ToolResult(false, "The text field did not accept the text.", verification = VerificationStatus.FAILED)
+        }
+        // Re-find: the node object can go stale after the edit.
+        val afterText = reader.findEditable(packageName)?.text?.toString().orEmpty()
+        when {
+            afterText == text || (text.isNotEmpty() && afterText.contains(text)) ->
+                ToolResult(true, "Typed text.", verification = VerificationStatus.VERIFIED, evidence = "kolom berisi \"$afterText\"")
+            afterText == beforeText ->
+                ToolResult(false, "Mengetik tidak mengubah kolom (teks tetap \"$beforeText\") — bukan sukses.", verification = VerificationStatus.NO_EFFECT)
+            else ->
+                ToolResult(false, "Kolom berubah tapi isinya tidak sesuai (\"$afterText\", bukan \"$text\").", verification = VerificationStatus.UNVERIFIED)
+        }
     } catch (e: Exception) {
-        ToolResult(false, e.message ?: e.javaClass.simpleName)
+        ToolResult(false, e.message ?: e.javaClass.simpleName, verification = VerificationStatus.FAILED)
+    }
+
+    /**
+     * (v8.1) Submit + read-back: Enter terkirim lalu layar harus berubah
+     * (navigasi hasil, keyboard turun, teks baru). Tidak ada perubahan =
+     * NO_EFFECT + gagal jujur.
+     */
+    override suspend fun submit(packageName: String): ToolResult = try {
+        val before = ScreenSnapshot.take(reader, packageName)
+        if (!executor.pressEnter(packageName)) {
+            ToolResult(
+                false,
+                "Could not submit: no focused text field, or the field did not accept Enter " +
+                    "(needs Android 12+).",
+                verification = VerificationStatus.FAILED,
+                notPossible = true,
+            )
+        } else {
+            Verification.verifyScreenChanged(
+                reader, packageName, before,
+                okMessage = "Submitted.",
+                noEffectMessage = "Enter terkirim tapi layar tidak berubah (pencarian mungkin tidak jalan) — bukan sukses.",
+            )
+        }
+    } catch (e: Exception) {
+        ToolResult(false, e.message ?: e.javaClass.simpleName, verification = VerificationStatus.FAILED)
     }
 
     override suspend fun readScreen(packageName: String, limit: Int): ToolResult = try {
@@ -149,17 +240,19 @@ class AccessibilityTools(
             message = if (texts.isEmpty()) "No text found on screen for $packageName."
                 else texts.take(10).joinToString(" | ").take(500),
             data = data,
+            // Read-only: the observation IS the evidence.
+            verification = if (texts.isNotEmpty()) VerificationStatus.VERIFIED else VerificationStatus.FAILED,
         )
     } catch (e: Exception) {
-        ToolResult(false, e.message ?: e.javaClass.simpleName)
+        ToolResult(false, e.message ?: e.javaClass.simpleName, verification = VerificationStatus.FAILED)
     }
 
     override suspend fun findText(packageName: String, text: String, exact: Boolean): ToolResult = try {
         val node = if (exact) reader.findByText(packageName, text) else reader.findByTextContains(packageName, text)
-        if (node != null) ToolResult(true, "Found \"$text\".")
-        else ToolResult(false, "\"$text\" is not on screen.")
+        if (node != null) ToolResult(true, "Found \"$text\".", verification = VerificationStatus.VERIFIED)
+        else ToolResult(false, "\"$text\" is not on screen.", verification = VerificationStatus.FAILED)
     } catch (e: Exception) {
-        ToolResult(false, e.message ?: e.javaClass.simpleName)
+        ToolResult(false, e.message ?: e.javaClass.simpleName, verification = VerificationStatus.FAILED)
     }
 
     override suspend fun extract(packageName: String, pattern: String, max: Int): ToolResult = try {
@@ -174,42 +267,96 @@ class AccessibilityTools(
             message = if (matches.isEmpty()) "No match for '$pattern' on screen."
                 else matches.joinToString(", "),
             data = data,
+            verification = if (matches.isNotEmpty()) VerificationStatus.VERIFIED else VerificationStatus.FAILED,
         )
     } catch (e: Exception) {
-        ToolResult(false, "Invalid pattern '$pattern': ${e.message}")
+        ToolResult(false, "Invalid pattern '$pattern': ${e.message}", verification = VerificationStatus.FAILED)
     }
 
-    override suspend fun scroll(packageName: String): ToolResult = resultOf(
-        okMessage = "Scrolled.",
-        failMessage = "Nothing scrollable on screen.",
-    ) { executor.scrollForwardOnScreen(packageName) }
+    /**
+     * (v8.1) Scroll/swipe/back/home + read-back: layar (atau aplikasi
+     * foreground) harus berubah. Di ujung daftar, scroll yang tidak mengubah
+     * apa pun = NO_EFFECT + gagal jujur — skill yang memang mengharapkan
+     * ujung daftar harus memakai onFail="skip" untuk itu.
+     */
+    override suspend fun scroll(packageName: String): ToolResult = try {
+        val before = ScreenSnapshot.take(reader, packageName)
+        if (!executor.scrollForwardOnScreen(packageName)) {
+            ToolResult(false, "Nothing scrollable on screen.", verification = VerificationStatus.FAILED)
+        } else {
+            Verification.verifyScreenChanged(
+                reader, packageName, before,
+                okMessage = "Scrolled.",
+                noEffectMessage = "Scroll tidak mengubah layar (mungkin sudah di ujung) — bukan sukses.",
+            )
+        }
+    } catch (e: Exception) {
+        ToolResult(false, e.message ?: e.javaClass.simpleName, verification = VerificationStatus.FAILED)
+    }
 
-    override suspend fun swipe(direction: String, durationMs: Long): ToolResult = resultOf(
-        okMessage = "Swiped $direction.",
-        failMessage = "Swipe $direction was not accepted.",
-    ) { executor.swipeDirection(direction, durationMs) }
+    override suspend fun swipe(direction: String, durationMs: Long): ToolResult = try {
+        val pkg = reader.currentPackage().orEmpty()
+        val before = ScreenSnapshot.take(reader, pkg)
+        if (!executor.swipeDirection(direction, durationMs)) {
+            ToolResult(false, "Swipe $direction was not accepted.", verification = VerificationStatus.FAILED)
+        } else {
+            Verification.verifyScreenChanged(
+                reader, pkg, before,
+                okMessage = "Swiped $direction.",
+                noEffectMessage = "Swipe $direction tidak mengubah layar — bukan sukses.",
+                afterPkg = reader.currentPackage().takeIf { !it.isNullOrBlank() } ?: pkg,
+            )
+        }
+    } catch (e: Exception) {
+        ToolResult(false, e.message ?: e.javaClass.simpleName, verification = VerificationStatus.FAILED)
+    }
 
-    override suspend fun back(): ToolResult = resultOf(
-        okMessage = "Back.",
-        failMessage = "Back was not accepted.",
-    ) { executor.back() }
+    override suspend fun back(): ToolResult = try {
+        val pkg = reader.currentPackage().orEmpty()
+        val before = ScreenSnapshot.take(reader, pkg)
+        if (!executor.back()) {
+            ToolResult(false, "Back was not accepted.", verification = VerificationStatus.FAILED)
+        } else {
+            Verification.verifyScreenChanged(
+                reader, pkg, before,
+                okMessage = "Back.",
+                noEffectMessage = "Back tidak mengubah layar — bukan sukses.",
+                afterPkg = reader.currentPackage().takeIf { !it.isNullOrBlank() } ?: pkg,
+            )
+        }
+    } catch (e: Exception) {
+        ToolResult(false, e.message ?: e.javaClass.simpleName, verification = VerificationStatus.FAILED)
+    }
 
-    override suspend fun home(): ToolResult = resultOf(
-        okMessage = "Home.",
-        failMessage = "Home was not accepted.",
-    ) { executor.home() }
+    override suspend fun home(): ToolResult = try {
+        val pkg = reader.currentPackage().orEmpty()
+        val before = ScreenSnapshot.take(reader, pkg)
+        if (!executor.home()) {
+            ToolResult(false, "Home was not accepted.", verification = VerificationStatus.FAILED)
+        } else {
+            Verification.verifyScreenChanged(
+                reader, pkg, before,
+                okMessage = "Home.",
+                noEffectMessage = "Home tidak mengubah layar (mungkin sudah di Home) — bukan sukses.",
+                afterPkg = reader.currentPackage().takeIf { !it.isNullOrBlank() } ?: pkg,
+            )
+        }
+    } catch (e: Exception) {
+        ToolResult(false, e.message ?: e.javaClass.simpleName, verification = VerificationStatus.FAILED)
+    }
 
     override suspend fun waitMs(ms: Long): ToolResult {
         delay(ms.coerceIn(0, 30_000))
-        return ToolResult(true, "Waited ${ms}ms.")
+        // Pure wait, no state change expected — the wait itself is the effect.
+        return ToolResult(true, "Waited ${ms}ms.", verification = VerificationStatus.VERIFIED)
     }
 
     override suspend fun waitForText(packageName: String, text: String, timeoutMs: Long): ToolResult = try {
         val found = executor.waitFor(timeoutMs) { reader.findByTextContains(packageName, text) }
-        if (found != null) ToolResult(true, "Found \"$text\".")
-        else ToolResult(false, "\"$text\" did not appear within ${timeoutMs}ms.")
+        if (found != null) ToolResult(true, "Found \"$text\".", verification = VerificationStatus.VERIFIED)
+        else ToolResult(false, "\"$text\" did not appear within ${timeoutMs}ms.", verification = VerificationStatus.FAILED)
     } catch (e: Exception) {
-        ToolResult(false, e.message ?: e.javaClass.simpleName)
+        ToolResult(false, e.message ?: e.javaClass.simpleName, verification = VerificationStatus.FAILED)
     }
 
     // --- v6 CodeAgent ---
@@ -230,15 +377,16 @@ class AccessibilityTools(
     }
 
     private fun codeAgentOffResult(): ToolResult =
-        ToolResult(false, "Code agent is turned off (feature flag CODE_AGENT). Turn it on in Settings to run code tasks.")
+        ToolResult(false, "Code agent is turned off (feature flag CODE_AGENT). Turn it on in Settings to run code tasks.", verification = VerificationStatus.FAILED, notPossible = true)
 
     override suspend fun readFileScoped(path: String): ToolResult = try {
         if (!codeAgentEnabled()) return codeAgentOffResult()
         val content = scopedStore.read(path)
-            ?: return ToolResult(false, "Could not read '$path': not found, or outside the scoped directory (mobius-code).")
-        ToolResult(true, content.take(500), mapOf("path" to path, "content" to content))
+            ?: return ToolResult(false, "Could not read '$path': not found, or outside the scoped directory (mobius-code).", verification = VerificationStatus.FAILED)
+        // Read-only: the content read IS the evidence.
+        ToolResult(true, content.take(500), mapOf("path" to path, "content" to content), verification = VerificationStatus.VERIFIED)
     } catch (e: Exception) {
-        ToolResult(false, e.message ?: e.javaClass.simpleName)
+        ToolResult(false, e.message ?: e.javaClass.simpleName, verification = VerificationStatus.FAILED)
     }
 
     override suspend fun writeFileScoped(path: String, content: String): ToolResult = try {
@@ -246,26 +394,34 @@ class AccessibilityTools(
         val gate = ActionGate.checkFileWrite(path, scopedStore.exists(path))
         when (gate.decision) {
             GateDecision.DENIED ->
-                return ToolResult(false, "Ditolak ActionGate: ${gate.reason}")
+                return ToolResult(false, "Ditolak ActionGate: ${gate.reason}", verification = VerificationStatus.FAILED, notPossible = true)
             GateDecision.NEEDS_APPROVAL ->
                 // No approval hook exists at the Tool layer: fail closed. The caller
                 // (CodeAgent) writes under a fresh name per run, so this is not hit
                 // in normal operation; a skill step hitting it must go through the
                 // SkillRunner confirmStep hook instead.
-                return ToolResult(false, "Butuh persetujuan: ${gate.reason} Tulis ke nama file baru, atau minta persetujuan dulu.")
+                return ToolResult(false, "Butuh persetujuan: ${gate.reason} Tulis ke nama file baru, atau minta persetujuan dulu.", verification = VerificationStatus.FAILED, notPossible = true)
             GateDecision.ALLOW -> Unit
         }
-        if (scopedStore.write(path, content)) ToolResult(true, "Wrote $path (${content.length} chars).", mapOf("path" to path))
-        else ToolResult(false, "Could not write '$path': unsafe path, or file too large (max ${ScopedFileStore.MAX_FILE_CHARS} chars).")
+        if (!scopedStore.write(path, content)) {
+            return ToolResult(false, "Could not write '$path': unsafe path, or file too large (max ${ScopedFileStore.MAX_FILE_CHARS} chars).", verification = VerificationStatus.FAILED, notPossible = true)
+        }
+        // (v8.1) Read-back: tulis lalu baca lagi, bandingkan isinya.
+        val readBack = scopedStore.read(path)
+        if (readBack == content) {
+            ToolResult(true, "Wrote $path (${content.length} chars).", mapOf("path" to path), verification = VerificationStatus.VERIFIED, evidence = "isi file dibaca-balik, cocok")
+        } else {
+            ToolResult(false, "File '$path' ditulis tapi baca-balik tidak cocok — belum terverifikasi.", verification = VerificationStatus.UNVERIFIED)
+        }
     } catch (e: Exception) {
-        ToolResult(false, e.message ?: e.javaClass.simpleName)
+        ToolResult(false, e.message ?: e.javaClass.simpleName, verification = VerificationStatus.FAILED)
     }
 
     override suspend fun runCommand(command: String, args: List<String>): ToolResult = try {
         if (!codeAgentEnabled()) return codeAgentOffResult()
         val gate = ActionGate.checkCommand(command, args)
         if (gate.decision == GateDecision.DENIED) {
-            return ToolResult(false, "Ditolak ActionGate: ${gate.reason}")
+            return ToolResult(false, "Ditolak ActionGate: ${gate.reason}", verification = VerificationStatus.FAILED, notPossible = true)
         }
         val result = commandRunner.run(command, args)
         val data = mapOf(
@@ -275,22 +431,150 @@ class AccessibilityTools(
             "timedOut" to result.timedOut.toString(),
         )
         when {
-            result.timedOut -> ToolResult(false, "Command timed out after ${CommandRunner.TIMEOUT_MS / 1000}s and was killed.", data)
-            result.exitCode == 0 -> ToolResult(true, result.stdout.ifBlank { "(no output)" }.take(2000), data)
+            result.timedOut -> ToolResult(false, "Command timed out after ${CommandRunner.TIMEOUT_MS / 1000}s and was killed.", data, verification = VerificationStatus.FAILED)
+            // Exit code 0 IS the effect evidence for a command run.
+            result.exitCode == 0 -> ToolResult(true, result.stdout.ifBlank { "(no output)" }.take(2000), data, verification = VerificationStatus.VERIFIED, evidence = "exit code 0")
             else -> ToolResult(
                 false,
                 "Command exited with code ${result.exitCode}." +
                     (if (result.stderr.isNotBlank()) " ${result.stderr.take(500)}" else ""),
                 data,
+                verification = VerificationStatus.FAILED,
             )
         }
     } catch (e: Exception) {
-        ToolResult(false, e.message ?: e.javaClass.simpleName)
+        ToolResult(false, e.message ?: e.javaClass.simpleName, verification = VerificationStatus.FAILED)
     }
 
-    private suspend fun resultOf(okMessage: String, failMessage: String, block: suspend () -> Boolean): ToolResult = try {
-        if (block()) ToolResult(true, okMessage) else ToolResult(false, failMessage)
+    // --- v8.1 alarm skill ---
+    //
+    // Flow: (1) validasi jam; (2) cek registry Jam (last enforcement, sama
+    // seperti launchApp — SkillRunner sudah mengecek lebih dulu supaya
+    // penolakannya membawa pesan "belum diizinkan"); (3) kirim
+    // AlarmClock.ACTION_SET_ALARM dengan EXTRA_SKIP_UI=true — aplikasi Jam
+    // sistem yang memasang alarmnya, bukan MOBIUS; (4) VERIFIKASI: buka daftar
+    // alarm (ACTION_SHOW_ALARMS) dan baca layar — jam harus terlihat di
+    // daftar sebagai teks ("07:00" / "7:00", sesuai format 24-jam/12-jam
+    // perangkat). Tidak terlihat -> success=true + UNVERIFIED + pesan
+    // "belum terverifikasi" (bukan gagal mutlak: intent terkirim dan alarm
+    // mungkin saja terpasang, tapi TIDAK BOLEH diklaim) — done-gate
+    // menurunkannya ke PARTIAL. Kata "berhasil" tidak pernah muncul tanpa
+    // bukti read-back.
+    //
+    // Batasan jujur: verifikasi ini membaca TEKS LAYAR daftar alarm. Bila
+    // aplikasi Jam di HP tidak menampilkan jam alarm sebagai teks yang bisa
+    // dibaca Accessibility (atau memakai package Jam lain), hasilnya
+    // UNVERIFIED walau alarm sebenarnya terpasang — itu harga kejujuran,
+    // dan pesan kepada pengguna selalu menyuruh cek aplikasi Jam.
+    // Android TIDAK menyediakan API publik untuk membaca daftar alarm
+    // (content provider deskclock tidak stabil antar OEM), jadi read-back
+    // layar adalah satu-satunya verifikasi yang tersedia.
+    override suspend fun setAlarm(packageName: String, hour: Int, minute: Int, message: String): ToolResult {
+        if (hour !in 0..23 || minute !in 0..59) {
+            return ToolResult(
+                false,
+                "Jam tidak valid: $hour:$minute (jam 0–23, menit 0–59).",
+                verification = VerificationStatus.FAILED,
+                notPossible = true,
+            )
+        }
+        val ctx = service.applicationContext
+        val allowed = runCatching { AppRegistry(ctx).isAllowed(packageName) }.getOrDefault(false)
+        if (!allowed) {
+            return ToolResult(
+                false,
+                "Aplikasi Jam ($packageName) belum diizinkan — aktifkan di Settings > Aplikasi yang diizinkan.",
+                verification = VerificationStatus.FAILED,
+                notPossible = true,
+            )
+        }
+        val label = message.trim()
+        val setIntent = Intent(AlarmClock.ACTION_SET_ALARM).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            putExtra(AlarmClock.EXTRA_HOUR, hour)
+            putExtra(AlarmClock.EXTRA_MINUTES, minute)
+            if (label.isNotEmpty()) putExtra(AlarmClock.EXTRA_MESSAGE, label)
+            putExtra(AlarmClock.EXTRA_SKIP_UI, true)
+        }
+        try {
+            ctx.startActivity(setIntent)
+        } catch (e: SecurityException) {
+            // Izin SET_ALARM (normal permission, manifest v8.1) belum aktif —
+            // terjadi bila APK lama di-update tanpa reinstall penuh.
+            return ToolResult(
+                false,
+                "Tidak bisa memasang alarm: izin SET_ALARM belum aktif — install ulang APK v8.1.",
+                verification = VerificationStatus.FAILED,
+                notPossible = true,
+            )
+        } catch (e: ActivityNotFoundException) {
+            return ToolResult(
+                false,
+                "Tidak ada aplikasi Jam di HP ini yang bisa memasang alarm.",
+                verification = VerificationStatus.FAILED,
+                notPossible = true,
+            )
+        } catch (e: Exception) {
+            return ToolResult(false, e.message ?: e.javaClass.simpleName, verification = VerificationStatus.FAILED)
+        }
+        // --- Read-back: buka daftar alarm, cari jamnya sebagai teks. ---
+        val time24 = "%02d:%02d".format(hour, minute)
+        val time12 = "%d:%02d".format(if (hour % 12 == 0) 12 else hour % 12, minute)
+        val candidates = listOf(time24, time12)
+        try {
+            val showIntent = Intent(AlarmClock.ACTION_SHOW_ALARMS).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            ctx.startActivity(showIntent)
+        } catch (e: Exception) {
+            // Daftar alarm tidak bisa dibuka — intent SET sudah terkirim, tapi
+            // verifikasi tidak memungkinkan: laporkan belum terverifikasi.
+            return ToolResult(
+                true,
+                "Permintaan alarm $time24 sudah dikirim ke aplikasi Jam, tapi daftar alarm tidak bisa dibuka untuk verifikasi — belum terverifikasi, cek aplikasi Jam.",
+                verification = VerificationStatus.UNVERIFIED,
+            )
+        }
+        // Tunggu aplikasi Jam muncul di foreground (maks 4 dtk), lalu baca layar.
+        val shown = Verification.waitForForeground(reader, packageName, 4_000)
+        val foregroundPkg = reader.currentPackage() ?: packageName
+        val texts = if (shown || foregroundPkg == packageName) {
+            // Beri waktu daftar alarm me-render, lalu baca.
+            val stable = Verification.waitForStableScreen(reader, foregroundPkg, 3_000)
+            stable.texts
+        } else {
+            // Aplikasi Jam tidak muncul — baca apa pun yang ada di layar.
+            ScreenSnapshot.take(reader, foregroundPkg).texts
+        }
+        val hit = candidates.firstOrNull { want -> texts.any { it.contains(want) } }
+        return if (hit != null) {
+            ToolResult(
+                true,
+                "Alarm $time24 sudah terpasang (terverifikasi di daftar alarm).",
+                mapOf("hour" to hour.toString(), "minute" to minute.toString(), "label" to label, "time" to time24),
+                verification = VerificationStatus.VERIFIED,
+                evidence = "\"$hit\" terlihat di daftar alarm",
+            )
+        } else {
+            ToolResult(
+                true,
+                "Permintaan alarm $time24 sudah dikirim ke aplikasi Jam, tapi $time24 tidak terlihat di daftar alarm — belum terverifikasi, cek aplikasi Jam.",
+                mapOf("hour" to hour.toString(), "minute" to minute.toString(), "label" to label, "time" to time24),
+                verification = VerificationStatus.UNVERIFIED,
+            )
+        }
+    }
+
+    private suspend fun resultOf(
+        okMessage: String,
+        failMessage: String,
+        okVerification: VerificationStatus = VerificationStatus.UNVERIFIED,
+        okEvidence: String? = null,
+        block: suspend () -> Boolean,
+    ): ToolResult = try {
+        if (block()) ToolResult(true, okMessage, verification = okVerification, evidence = okEvidence)
+        else ToolResult(false, failMessage, verification = VerificationStatus.FAILED)
     } catch (e: Exception) {
-        ToolResult(false, e.message ?: e.javaClass.simpleName)
+        ToolResult(false, e.message ?: e.javaClass.simpleName, verification = VerificationStatus.FAILED)
     }
 }

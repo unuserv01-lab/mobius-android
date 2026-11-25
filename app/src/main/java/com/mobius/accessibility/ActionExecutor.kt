@@ -10,7 +10,9 @@ import android.graphics.Path
 import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
+import android.util.Log
 import android.view.accessibility.AccessibilityNodeInfo
+import com.mobius.core.AppRegistry
 import kotlinx.coroutines.delay
 
 /**
@@ -128,8 +130,21 @@ class ActionExecutor(
      * means it never appeared (app missing/disabled, start blocked, service dead).
      * Fails closed: when the service is not running, currentPackage() is null and we
      * return false instead of claiming success.
+     *
+     * v7.9-tambahan: the registry is checked FIRST (default-deny — see
+     * [AppRegistry]). An app the user has not allowed is never started at all,
+     * from ANY caller (skill, planning loop, reply agent): this is the last
+     * enforcement point, so a path that forgets the check still cannot open the
+     * app. The honest "not allowed yet" message itself is produced one layer up
+     * ([SkillRunner] via [com.mobius.core.ActionGate.checkRegistry]) — this
+     * function can only return a Boolean, so a registry denial here is a plain
+     * false. A DataStore read failure also fails closed (false) and is logged.
      */
     suspend fun launchApp(packageName: String): Boolean {
+        val allowed = runCatching { AppRegistry(context).isAllowed(packageName) }
+            .onFailure { Log.w(TAG, "registry read failed for $packageName, denying launch", it) }
+            .getOrDefault(false)
+        if (!allowed) return false
         val intent = context.packageManager.getLaunchIntentForPackage(packageName)
             ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) ?: return false
         try {
@@ -168,5 +183,24 @@ class ActionExecutor(
             if (SystemClock.elapsedRealtime() >= deadline) return null
             delay(pollMs)
         }
+    }
+
+    /**
+     * (v8.1) Deterministic expect helpers — kode yang menunggu, bukan model
+     * (pola Mika BatchRunner expect / Nanobrowser wait). Dipakai verifikasi
+     * pasca-aksi di [com.mobius.core.Verification] dan tool alarm.
+     */
+    /** True bila [packageName] menjadi aplikasi foreground dalam [timeoutMs]. */
+    suspend fun waitForForeground(packageName: String, timeoutMs: Long): Boolean =
+        waitFor(timeoutMs) { reader.currentPackage().takeIf { it == packageName } } != null
+
+    /** True bila [text] HILANG dari layar dalam [timeoutMs] (expect "teks hilang"). */
+    suspend fun waitForTextGone(pkg: String, text: String, timeoutMs: Long): Boolean =
+        waitFor(timeoutMs) {
+            if (reader.findByTextContains(pkg, text) == null) true else null
+        } != null
+
+    private companion object {
+        private const val TAG = "ActionExecutor"
     }
 }

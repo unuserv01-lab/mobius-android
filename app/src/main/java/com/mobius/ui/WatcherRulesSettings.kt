@@ -56,14 +56,14 @@ fun WatcherRulesSection(app: MobiusApp) {
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(
-            strings.watcherTitle,
+            strings.watcher.watcherTitle,
             style = MaterialTheme.typography.titleMedium,
             color = MaterialTheme.colorScheme.tertiary,
         )
-        Text(strings.watcherDesc, style = MaterialTheme.typography.bodySmall)
+        Text(strings.watcher.watcherDesc, style = MaterialTheme.typography.bodySmall)
         if (!watcherOn) {
             Text(
-                strings.watcherOff,
+                strings.watcher.watcherOff,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
             )
@@ -71,63 +71,66 @@ fun WatcherRulesSection(app: MobiusApp) {
 
         // ---- pending drafts waiting for approval (rules with auto-send OFF) ----
         if (pendingDrafts.isNotEmpty()) {
-            Text(strings.watcherPendingTitle, style = MaterialTheme.typography.titleSmall)
+            Text(strings.watcher.watcherPendingTitle, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
             pendingDrafts.forEach { draft ->
                 Column(
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text(
-                        strings.watcherFrom.format(draft.sender, draft.ruleName),
+                        strings.watcher.watcherFrom.format(draft.sender, draft.ruleName),
                         style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
                     )
-                    Text(strings.watcherIncoming.format(draft.incomingText), style = MaterialTheme.typography.bodySmall)
-                    Text(strings.watcherReply.format(draft.replyText), style = MaterialTheme.typography.bodySmall)
+                    Text(strings.watcher.watcherIncoming.format(draft.incomingText), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(strings.watcher.watcherReply.format(draft.replyText), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         GradientButton(onClick = {
                             scope.launch {
                                 val ok = app.watcherEngine().sendPending(draft.id)
-                                formNote = if (ok) strings.watcherSent.format(draft.sender)
-                                else strings.watcherSendFailed
+                                formNote = if (ok) strings.watcherForm.watcherSent.format(draft.sender)
+                                else strings.watcherForm.watcherSendFailed
                             }
-                        }) { Text(strings.watcherSend) }
+                        }) { Text(strings.watcher.watcherSend) }
                         OutlinedButton(onClick = {
                             scope.launch { app.watcherEngine().discardPending(draft.id) }
-                        }) { Text(strings.watcherDiscard) }
+                        }) { Text(strings.watcher.watcherDiscard) }
                     }
                 }
             }
         }
 
         // ---- existing rules ----
-        Text(strings.watcherRulesTitle, style = MaterialTheme.typography.titleSmall)
+        Text(strings.watcher.watcherRulesTitle, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
         if (rules.isEmpty()) {
-            Text(strings.watcherRulesEmpty, style = MaterialTheme.typography.bodySmall)
+            Text(strings.watcher.watcherRulesEmpty, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         rules.forEach { rule ->
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(rule.name, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                    Text(rule.name, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurface)
                     Switch(
                         checked = rule.enabled,
                         onCheckedChange = { v -> scope.launch { rulesStore.setEnabled(rule.id, v) } },
                     )
                 }
                 Text(
-                    strings.watcherMatchPrefix +
-                        (if (rule.matchText.isNotBlank()) strings.watcherMatchText.format(rule.matchText) else "") +
+                    strings.watcher.watcherMatchPrefix +
+                        (if (rule.matchText.isNotBlank()) strings.watcher.watcherMatchText.format(rule.matchText) else "") +
                         (if (rule.matchText.isNotBlank() && rule.sender.isNotBlank()) " + " else "") +
-                        (if (rule.sender.isNotBlank()) strings.watcherMatchSender.format(rule.sender) else ""),
+                        (if (rule.sender.isNotBlank()) strings.watcher.watcherMatchSender.format(rule.sender) else ""),
                     style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Text(strings.watcherReplyIs.format(rule.replyTemplate), style = MaterialTheme.typography.bodySmall)
+                Text(strings.watcher.watcherReplyIs.format(rule.replyTemplate), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Text(
-                        if (rule.autoSend) strings.watcherAutoOn else strings.watcherAutoOff,
+                        if (rule.autoSend) strings.watcher.watcherAutoOn else strings.watcher.watcherAutoOff,
                         style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.weight(1f),
                     )
                     Switch(
@@ -135,57 +138,58 @@ fun WatcherRulesSection(app: MobiusApp) {
                         onCheckedChange = { v -> scope.launch { rulesStore.setAutoSend(rule.id, v) } },
                     )
                     OutlinedButton(onClick = { scope.launch { rulesStore.deleteRule(rule.id) } }) {
-                        Text(strings.watcherDelete)
+                        Text(strings.watcher.watcherDelete)
                     }
                 }
             }
         }
 
         // ---- add a rule ----
-        Text(strings.watcherAddTitle, style = MaterialTheme.typography.titleSmall)
+        Text(strings.watcherForm.watcherAddTitle, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
         OutlinedTextField(
             value = name, onValueChange = { name = it },
-            label = { Text(strings.watcherNameLabel) },
+            label = { Text(strings.watcherForm.watcherNameLabel) },
             modifier = Modifier.fillMaxWidth(), singleLine = true,
         )
         OutlinedTextField(
             value = matchText, onValueChange = { matchText = it },
-            label = { Text(strings.watcherMatchLabel) },
+            label = { Text(strings.watcherForm.watcherMatchLabel) },
             modifier = Modifier.fillMaxWidth(), singleLine = true,
         )
         OutlinedTextField(
             value = sender, onValueChange = { sender = it },
-            label = { Text(strings.watcherSenderLabel) },
+            label = { Text(strings.watcherForm.watcherSenderLabel) },
             modifier = Modifier.fillMaxWidth(), singleLine = true,
         )
         OutlinedTextField(
             value = replyTemplate, onValueChange = { replyTemplate = it },
-            label = { Text(strings.watcherReplyLabel) },
+            label = { Text(strings.watcherForm.watcherReplyLabel) },
             modifier = Modifier.fillMaxWidth(),
         )
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                strings.watcherAutoDesc,
+                strings.watcherForm.watcherAutoDesc,
                 style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.weight(1f).padding(end = 8.dp),
             )
             Switch(checked = autoSend, onCheckedChange = { autoSend = it })
         }
         formError?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
-        formNote?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+        formNote?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         GradientButton(onClick = {
             scope.launch {
                 val created = rulesStore.addRule(name, matchText, sender, replyTemplate, autoSend)
                 if (created == null) {
                     formNote = null
-                    formError = strings.watcherFormError
+                    formError = strings.watcherForm.watcherFormError
                 } else {
                     formError = null
-                    formNote = strings.watcherRuleCreated.format(created.name) +
-                        (if (created.autoSend) strings.watcherRuleCreatedAuto else strings.watcherRuleCreatedDraft)
+                    formNote = strings.watcherForm.watcherRuleCreated.format(created.name) +
+                        (if (created.autoSend) strings.watcherForm.watcherRuleCreatedAuto else strings.watcherForm.watcherRuleCreatedDraft)
                     name = ""; matchText = ""; sender = ""; replyTemplate = ""; autoSend = false
                 }
             }
-        }) { Text(strings.watcherAddButton) }
+        }) { Text(strings.watcherForm.watcherAddButton) }
     }
 }

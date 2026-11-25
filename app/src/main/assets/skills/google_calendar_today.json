@@ -1,0 +1,34 @@
+{
+    "description": "Lihat jadwal/agenda untuk satu hari: hari ini, besok, lusa, atau tanggal tertentu.",
+    "id": "google_calendar_today",
+    "maxSteps": 5,
+    "name": "Jadwal hari ini / besok",
+    "params": [
+        {
+            "default": "hari ini",
+            "name": "day",
+            "required": false
+        }
+    ],
+    "steps": [
+        {
+            "args": {
+                "day": "$day"
+            },
+            "storeAs": "events",
+            "tool": "calendarList"
+        }
+    ],
+    "summarize": true,
+    "timeoutMs": 60000,
+    "triggers": [
+        "ada acara apa",
+        "agenda besok",
+        "agenda hari ini",
+        "cek jadwal",
+        "jadwal besok",
+        "jadwal hari ini",
+        "jadwal lusa",
+        "jadwal saya"
+    ]
+}

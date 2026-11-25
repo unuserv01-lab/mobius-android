@@ -39,7 +39,7 @@ class MobiusApp : Application() {
     val featureFlags by lazy { FeatureFlags(this) }
     val onDeviceAI by lazy { OnDeviceAI() }
     val aiRouter by lazy { AIRouter(onDeviceAI, CloudAI(), permissions, memoryStore, OpenRouterAI()) }
-    val skillRegistry by lazy { SkillRegistry(this) }
+    val skillRegistry by lazy { SkillRegistry(this, memoryStore) }
     val skillRunner by lazy { SkillRunner() }
     val orchestrator by lazy {
         Orchestrator(
@@ -62,6 +62,9 @@ class MobiusApp : Application() {
         // Purge anything that expired while the app was closed.
         CoroutineScope(SupervisorJob() + Dispatchers.Default).launch {
             runCatching { memoryStore.purgeExpired() }
+            // (v8.1) Persist skill registry metadata (enabled/useCount) ke SQLite.
+            // Registry tetap jalan penuh tanpa DB; sync gagal = metadata in-memory saja.
+            runCatching { skillRegistry.syncMetadataToDb() }
         }
     }
 

@@ -117,6 +117,28 @@ data class ChatMessage(
     val expiresAt: Long,
 )
 
+/**
+ * One skill's registry metadata (v8.1, SKILL.md + progressive disclosure).
+ * The row is DERIVED from the skill file in assets/skills/ (name, description,
+ * version, source) — the file stays the source of truth for those columns —
+ * while `enabled` and `useCount` are runtime state owned by this table.
+ * No expiry: a row lives until the skill file disappears from assets (stale
+ * rows are harmless — the registry only reads rows for ids it loaded).
+ * Keyed by skill id (e.g. "shopee_price_search").
+ */
+@Entity(tableName = "skill_meta")
+data class SkillMetaEntry(
+    @PrimaryKey val id: String,
+    val name: String,
+    val description: String,
+    val version: Int,
+    /** "json" or "markdown" (see [SkillSource]). */
+    val source: String,
+    val enabled: Boolean,
+    val useCount: Int,
+    val updatedAt: Long,
+)
+
 @Dao
 interface MemoryDao {
     @Insert
@@ -197,6 +219,32 @@ interface MemoryDao {
     // ----- v6 Memory V2: full memory list for relevance scoring -----
     @Query("SELECT * FROM memory ORDER BY created_at DESC")
     suspend fun allMemory(): List<MemoryEntry>
+
+    // ----- v8.1: skill registry metadata (SKILL.md) -----
+    /** Inserts a new row; ignored when the id already exists (see [updateSkillMetaFields]). */
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertSkillMeta(entry: SkillMetaEntry)
+
+    /** Refreshes only the file-derived columns; enabled/useCount are never touched here. */
+    @Query(
+        "UPDATE skill_meta SET name = :name, description = :description, " +
+            "version = :version, source = :source, updatedAt = :updatedAt WHERE id = :id"
+    )
+    suspend fun updateSkillMetaFields(
+        id: String, name: String, description: String, version: Int, source: String, updatedAt: Long,
+    )
+
+    @Query("SELECT * FROM skill_meta ORDER BY id ASC")
+    suspend fun allSkillMeta(): List<SkillMetaEntry>
+
+    @Query("SELECT * FROM skill_meta WHERE id = :id")
+    suspend fun skillMetaById(id: String): SkillMetaEntry?
+
+    @Query("UPDATE skill_meta SET enabled = :enabled WHERE id = :id")
+    suspend fun setSkillEnabled(id: String, enabled: Boolean)
+
+    @Query("UPDATE skill_meta SET useCount = useCount + 1 WHERE id = :id")
+    suspend fun incrementSkillUseCount(id: String)
 }
 
 val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -237,12 +285,28 @@ val MIGRATION_2_3 = object : Migration(2, 3) {
     }
 }
 
+val MIGRATION_3_4 = object : Migration(3, 4) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        // New table only (v8.1 skill registry metadata); existing memory +
+        // routing_log + task_trail + preferences + progress + chat_message
+        // rows are untouched — no DROP, no ALTER, no data migration.
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `skill_meta` (" +
+                "`id` TEXT NOT NULL, `name` TEXT NOT NULL, `description` TEXT NOT NULL, " +
+                "`version` INTEGER NOT NULL, `source` TEXT NOT NULL, " +
+                "`enabled` INTEGER NOT NULL, `useCount` INTEGER NOT NULL, " +
+                "`updatedAt` INTEGER NOT NULL, PRIMARY KEY(`id`))"
+        )
+    }
+}
+
 @Database(
     entities = [
         MemoryEntry::class, RoutingLogEntry::class, TaskTrailEntry::class,
         PreferenceEntry::class, ProgressEntry::class, ChatMessage::class,
+        SkillMetaEntry::class,
     ],
-    version = 3, exportSchema = false,
+    version = 4, exportSchema = false,
 )
 abstract class MobiusDatabase : RoomDatabase() {
     abstract fun dao(): MemoryDao
@@ -261,7 +325,7 @@ abstract class MobiusDatabase : RoomDatabase() {
  * behaves as ON (the default for every flag), so a DataStore failure never silently
  * drops chat history or relevance.
  */
-class MemoryStore(context: Context, featureFlags: FeatureFlags? = null) {
+class MemoryStore(context: Context, featureFlags: FeatureFlags? = null) : SkillMetaStore {
     private val appContext = context.applicationContext
     private val flags: FeatureFlags = featureFlags ?: FeatureFlags(appContext)
     // Own PermissionManager wrapper over the same "mobius_prefs" DataStore, only to read
@@ -270,7 +334,7 @@ class MemoryStore(context: Context, featureFlags: FeatureFlags? = null) {
 
     private val dao: MemoryDao = Room.databaseBuilder(
         appContext, MobiusDatabase::class.java, "mobius.db"
-    ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build().dao()
+    ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build().dao()
 
     /** Flag read that fails open to the flag's default (ON). */
     private suspend fun isFlagEnabled(flag: FeatureFlag): Boolean =
@@ -287,6 +351,48 @@ class MemoryStore(context: Context, featureFlags: FeatureFlags? = null) {
 
     /** All stored memories, newest first — used by ContextManager relevance scoring. */
     suspend fun allMemories(): List<MemoryEntry> = dao.allMemory()
+
+    // ----- v8.1: skill registry metadata (SkillMetaStore for SkillRegistry) -----
+    //
+    // Upsert is two steps on purpose: INSERT OR IGNORE creates the row with
+    // enabled=true/useCount=0, then UPDATE refreshes only the file-derived
+    // columns — a re-sync after an app update must never reset the user's
+    // enabled toggle or the recorded useCount. (No SQLite UPSERT syntax:
+    // minSdk 26 devices may run SQLite older than 3.24.)
+
+    override suspend fun upsertSkillMeta(meta: SkillMeta) {
+        val now = System.currentTimeMillis()
+        dao.insertSkillMeta(
+            SkillMetaEntry(
+                id = meta.id, name = meta.name, description = meta.description,
+                version = meta.version, source = meta.source.name.lowercase(),
+                enabled = true, useCount = 0, updatedAt = now,
+            )
+        )
+        dao.updateSkillMetaFields(
+            id = meta.id, name = meta.name, description = meta.description,
+            version = meta.version, source = meta.source.name.lowercase(), updatedAt = now,
+        )
+    }
+
+    override suspend fun allSkillMeta(): List<SkillMeta> =
+        dao.allSkillMeta().map { row ->
+            SkillMeta(
+                id = row.id, name = row.name, description = row.description,
+                version = row.version,
+                source = if (row.source == "markdown") SkillSource.MARKDOWN else SkillSource.JSON,
+                triggers = emptyList(), // triggers live in the file, not the table
+                enabled = row.enabled, useCount = row.useCount,
+            )
+        }
+
+    override suspend fun setSkillEnabled(id: String, enabled: Boolean) {
+        dao.setSkillEnabled(id, enabled)
+    }
+
+    override suspend fun incrementSkillUseCount(id: String) {
+        dao.incrementSkillUseCount(id)
+    }
 
     // ----- v6 Memory V2: preferences -----
     suspend fun setPreference(key: String, value: String) {
@@ -325,6 +431,9 @@ class MemoryStore(context: Context, featureFlags: FeatureFlags? = null) {
     }
 
     fun observeChatMessages(): Flow<List<ChatMessage>> = dao.observeChatMessages()
+
+    /** Deletes all chat rows (v8 drawer "Percakapan baru" + ChatHistoryScreen). */
+    suspend fun clearChat() = dao.clearChat()
 
     suspend fun remember(type: String, content: String, source: String, ttlSeconds: Long): Long {
         val now = System.currentTimeMillis()

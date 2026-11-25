@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      Night resources: MOBIUS is a dark-themed app (Compose darkColorScheme,
+      background #04000F). Declaring the night theme stops the system
+      (MIUI/HyperOS dark mode) from force-dark-inverting the app, which
+      turned light text black on the dark background. Keep in sync with
+      values/themes.xml.
+    -->
+    <style name="Theme.Mobius" parent="android:Theme.DeviceDefault.NoActionBar">
+        <item name="android:windowBackground">@color/mobius_bg</item>
+        <item name="android:statusBarColor">@color/mobius_bg</item>
+        <item name="android:navigationBarColor">@color/mobius_bg</item>
+        <item name="android:forceDarkAllowed">false</item>
+    </style>
+</resources>

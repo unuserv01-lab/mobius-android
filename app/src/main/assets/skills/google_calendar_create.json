@@ -1,0 +1,55 @@
+{
+    "description": "Buat acara baru di Google Calendar. Selalu minta persetujuan sebelum membuat (ActionGate). Waktu boleh ditulis bebas, contoh: besok 10:00, 2026-11-27 10:00, atau 2026-11-27T10:00:00+07:00. Akhir kosong berarti mulai + 1 jam.",
+    "id": "google_calendar_create",
+    "maxSteps": 5,
+    "name": "Buat acara (Calendar)",
+    "params": [
+        {
+            "name": "title",
+            "required": true
+        },
+        {
+            "name": "start",
+            "required": true
+        },
+        {
+            "default": "",
+            "name": "end",
+            "required": false
+        },
+        {
+            "default": "",
+            "name": "attendees",
+            "required": false
+        },
+        {
+            "default": "",
+            "name": "description",
+            "required": false
+        }
+    ],
+    "steps": [
+        {
+            "args": {
+                "attendees": "$attendees",
+                "description": "$description",
+                "end": "$end",
+                "start": "$start",
+                "title": "$title"
+            },
+            "risk": "irreversible",
+            "tool": "calendarCreate"
+        }
+    ],
+    "summarize": false,
+    "timeoutMs": 60000,
+    "triggers": [
+        "buat acara",
+        "buat agenda",
+        "buat janji",
+        "jadwalkan",
+        "jadwalkan acara",
+        "tambah acara",
+        "tambah jadwal"
+    ]
+}

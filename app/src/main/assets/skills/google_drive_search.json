@@ -1,0 +1,31 @@
+{
+    "description": "Cari file di Google Drive berdasarkan nama file.",
+    "id": "google_drive_search",
+    "maxSteps": 5,
+    "name": "Cari file (Drive)",
+    "params": [
+        {
+            "name": "query",
+            "required": true
+        }
+    ],
+    "steps": [
+        {
+            "args": {
+                "query": "$query"
+            },
+            "storeAs": "files",
+            "tool": "driveSearch"
+        }
+    ],
+    "summarize": true,
+    "timeoutMs": 60000,
+    "triggers": [
+        "cari di drive",
+        "cari file",
+        "cari file di drive",
+        "drive",
+        "file di drive",
+        "google drive"
+    ]
+}

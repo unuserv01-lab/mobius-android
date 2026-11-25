@@ -19,6 +19,11 @@
         tools:ignore="ProtectedPermissions" />
     <!-- Restart the core after reboot. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- v8.1 alarm skill: AlarmClock.ACTION_SET_ALARM requires this permission
+         (Android docs). Normal permission — auto-granted at install, no
+         runtime prompt, no user action. Without it startActivity() throws
+         SecurityException and setAlarm fails honestly instead. -->
+    <uses-permission android:name="android.permission.SET_ALARM" />
 
     <!-- Needed on Android 11+ to resolve launch intents for the apps skills operate. -->
     <queries>
@@ -26,6 +31,13 @@
         <package android:name="com.whatsapp.w4b" />
         <package android:name="com.shopee.id" />
         <package android:name="com.tokopedia.tkpd" />
+        <!-- v7.9-registry: let the app registry list installed launchable apps
+             (PackageManager queryIntentActivities). Narrow intent query, NOT
+             QUERY_ALL_PACKAGES. -->
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
     </queries>
 
     <application
@@ -48,6 +60,17 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- v7.9-auth: Google Sign-In redirect (manual OAuth 2.0 + PKCE, no
+                 play-services-auth). The browser returns here with
+                 com.mobius:/oauth2redirect?code=...&state=... and MainActivity
+                 forwards it to GoogleAuth.handleRedirect. No autoVerify: this
+                 is a custom scheme, not an https App Link. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="com.mobius" android:path="/oauth2redirect" />
             </intent-filter>
         </activity>
 

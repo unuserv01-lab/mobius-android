@@ -82,42 +82,42 @@ fun OnboardingScreen(app: MobiusApp, onDone: () -> Unit) {
 
     val permissionItems = listOf(
         PermissionItem(
-            strings.obDrawTitle,
-            strings.obDrawWhy,
-            strings.obDrawDenied,
-            status.overlay, strings.obOpenSettings,
+            strings.onboarding.obDrawTitle,
+            strings.onboarding.obDrawWhy,
+            strings.onboarding.obDrawDenied,
+            status.overlay, strings.onboardingActions.obOpenSettings,
         ) { open(pm.overlaySettingsIntent()) },
         PermissionItem(
-            strings.obAccTitle,
-            strings.obAccWhy,
-            strings.obAccDenied,
-            status.accessibility, strings.obOpenSettings,
+            strings.onboarding.obAccTitle,
+            strings.onboarding.obAccWhy,
+            strings.onboarding.obAccDenied,
+            status.accessibility, strings.onboardingActions.obOpenSettings,
         ) { open(pm.accessibilitySettingsIntent()) },
         PermissionItem(
-            strings.obNotifTitle,
-            strings.obNotifWhy,
-            strings.obNotifDenied,
-            status.notificationListener, strings.obOpenSettings,
+            strings.onboarding.obNotifTitle,
+            strings.onboarding.obNotifWhy,
+            strings.onboarding.obNotifDenied,
+            status.notificationListener, strings.onboardingActions.obOpenSettings,
         ) { open(pm.notificationListenerSettingsIntent()) },
         PermissionItem(
-            strings.obUsageTitle,
-            strings.obUsageWhy,
-            strings.obUsageDenied,
-            status.usageStats, strings.obOpenSettings,
+            strings.onboarding.obUsageTitle,
+            strings.onboarding.obUsageWhy,
+            strings.onboarding.obUsageDenied,
+            status.usageStats, strings.onboardingActions.obOpenSettings,
         ) { open(pm.usageAccessSettingsIntent()) },
         PermissionItem(
-            strings.obStatusTitle,
-            strings.obStatusWhy,
-            strings.obStatusDenied,
-            status.postNotifications, strings.obAllow,
+            strings.onboarding.obStatusTitle,
+            strings.onboarding.obStatusWhy,
+            strings.onboarding.obStatusDenied,
+            status.postNotifications, strings.onboardingActions.obAllow,
         ) {
             if (Build.VERSION.SDK_INT >= 33) notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         },
         PermissionItem(
-            strings.obMicTitle,
-            strings.obMicWhy,
-            strings.obMicDenied,
-            status.microphone, strings.obAllow,
+            strings.onboarding.obMicTitle,
+            strings.onboarding.obMicWhy,
+            strings.onboarding.obMicDenied,
+            status.microphone, strings.onboardingActions.obAllow,
         ) { micLauncher.launch(Manifest.permission.RECORD_AUDIO) },
     )
 
@@ -136,7 +136,7 @@ fun OnboardingScreen(app: MobiusApp, onDone: () -> Unit) {
                 style = MaterialTheme.typography.bodyMedium.copy(brush = MobiusGradientBrush),
             )
             Text(
-                strings.obIntro,
+                strings.onboarding.obIntro,
                 modifier = Modifier.padding(top = 8.dp),
             )
         }
@@ -144,9 +144,9 @@ fun OnboardingScreen(app: MobiusApp, onDone: () -> Unit) {
         item {
             Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(strings.obApkTitle, style = MaterialTheme.typography.titleSmall)
-                    Text(strings.obApkBody, style = MaterialTheme.typography.bodySmall)
-                    OutlinedButton(onClick = { open(pm.appDetailsIntent()) }) { Text(strings.obApkButton) }
+                    Text(strings.onboardingActions.obApkTitle, style = MaterialTheme.typography.titleSmall)
+                    Text(strings.onboardingActions.obApkBody, style = MaterialTheme.typography.bodySmall)
+                    OutlinedButton(onClick = { open(pm.appDetailsIntent()) }) { Text(strings.onboardingActions.obApkButton) }
                 }
             }
         }
@@ -154,7 +154,7 @@ fun OnboardingScreen(app: MobiusApp, onDone: () -> Unit) {
             GradientButton(
                 onClick = { scope.launch { pm.setOnboardingDone(true); onDone() } },
                 modifier = Modifier.fillMaxWidth(),
-            ) { Text(strings.obContinue) }
+            ) { Text(strings.onboardingActions.obContinue) }
         }
     }
 }
@@ -167,14 +167,14 @@ private fun PermissionCard(item: PermissionItem) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(item.title, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
                 Text(
-                    if (item.granted) strings.obGranted else strings.obNotGranted,
+                    if (item.granted) strings.onboardingActions.obGranted else strings.onboardingActions.obNotGranted,
                     color = if (item.granted) MobiusSuccess else MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.labelMedium,
                 )
             }
             Text(item.why, style = MaterialTheme.typography.bodySmall)
             if (!item.granted) {
-                Text(strings.obSkipPrefix + item.ifDenied, style = MaterialTheme.typography.bodySmall)
+                Text(strings.onboardingActions.obSkipPrefix + item.ifDenied, style = MaterialTheme.typography.bodySmall)
                 GradientButton(onClick = item.onAction) { Text(item.actionLabel) }
             }
         }

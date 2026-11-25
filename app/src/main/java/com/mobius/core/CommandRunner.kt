@@ -4,6 +4,8 @@ import android.os.SystemClock
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.InputStream
 
@@ -43,11 +45,26 @@ data class CommandResult(
  * Runtime: [TIMEOUT_MS] (30 s) wall clock, then the process is killed
  * ([Process.destroyForcibly]) and [CommandResult.timedOut] is true. Stdout/stderr are
  * captured separately and capped, so a runaway script cannot fill memory.
+ *
+ * v8.1 — EXECUTION COORDINATOR (pattern only, from OpenMinis' serial execution
+ * coordinator — GPLv3, no code copied): all command runs go through ONE
+ * process-wide FIFO ([queueMutex]). The Tool layer builds one CommandRunner
+ * per task, so a per-instance lock would NOT serialize across parallel
+ * workers/tasks — the shared companion mutex does. A queued caller simply
+ * waits for the running command (at most [TIMEOUT_MS]); there is no
+ * preemption and no priority, by design — commands here are short scripts,
+ * not long jobs. Validation, allowlist and output caps are unchanged.
  */
 class CommandRunner(private val store: ScopedFileStore) {
 
-    /** Runs [command] with [args] after [validate]; never throws. */
-    suspend fun run(command: String, args: List<String>): CommandResult {
+    /**
+     * Runs [command] with [args] after [validate]; never throws.
+     * Serialized through the shared FIFO: one command runs at a time.
+     */
+    suspend fun run(command: String, args: List<String>): CommandResult =
+        queueMutex.withLock { runInternal(command, args) }
+
+    private suspend fun runInternal(command: String, args: List<String>): CommandResult {
         validate(command, args)?.let { reason ->
             return CommandResult(-1, "", "Command denied: $reason", false)
         }
@@ -123,11 +140,27 @@ class CommandRunner(private val store: ScopedFileStore) {
     }
 
     companion object {
+        /**
+         * v8.1 — the single FIFO for ALL command runs in this process. Lives in
+         * the companion (not per instance) because the Tool layer builds a fresh
+         * CommandRunner per task; an instance lock would let two tasks' scripts
+         * run concurrently. One command at a time, first-come-first-served.
+         */
+        private val queueMutex = Mutex()
+
         /** Wall-clock timeout per command run; the process is killed past this. */
         const val TIMEOUT_MS = 30_000L
 
         /** Per-stream output cap (characters). */
         const val MAX_OUTPUT_CHARS = 50_000
+
+        /**
+         * Combined output bound (characters, stdout + stderr): 2 x 50.000 = 100.000,
+         * i.e. ~100 KB — the context-flood cap. Enforced by construction through
+         * the per-stream cap above; kept as a named constant so callers (Tool,
+         * CodeAgent) can quote one number.
+         */
+        const val MAX_TOTAL_OUTPUT_CHARS = MAX_OUTPUT_CHARS * 2
 
         /** The complete command allowlist. Only "sh" is on it. */
         val ALLOWED_COMMANDS: Set<String> = setOf("sh")

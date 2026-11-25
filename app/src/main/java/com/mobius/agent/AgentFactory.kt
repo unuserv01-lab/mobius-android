@@ -55,27 +55,27 @@ class SummarizePageAgent(taskId: String, tools: AgentTools) : SubAgent(taskId, t
     override suspend fun execute(ctx: TaskContext, intent: RoutedIntent): AgentResult {
         val s = stringsFor(tools.language)
         val reader = tools.reader
-            ?: return AgentResult(false, s.sumNoAccess)
+            ?: return AgentResult(false, s.summarize.sumNoAccess)
 
         // Foreground app from UsageStats (already excludes MOBIUS itself); fall back to
         // the active window. Never read our own bubble window: its text is our UI, not
         // the page the user asked about.
         val pkg = ctx.foregroundApp ?: reader.currentPackage()
         if (pkg.isNullOrBlank() || pkg == MOBIUS_PACKAGE) {
-            return AgentResult(false, s.sumNoApp)
+            return AgentResult(false, s.summarize.sumNoApp)
         }
 
-        tools.status(s.sumReading)
+        tools.status(s.summarize.sumReading)
         val texts = reader.readScreen(pkg, READ_LIMIT)
             .map { it.trim() }
             .filter { it.isNotBlank() }
             .distinct() // WebView trees often repeat the same node text
         val (pageText, _) = FileExtractor.truncateText(texts.joinToString("\n").trim())
         if (pageText.length < MIN_READABLE_CHARS) {
-            return AgentResult(false, s.sumNoText)
+            return AgentResult(false, s.summarize.sumNoText)
         }
 
-        tools.status(s.sumSummarizing)
+        tools.status(s.summarize.sumSummarizing)
         val languageName = if (tools.language == AppLanguage.EN) "English" else "Bahasa Indonesia"
         val answer = tools.ai.generate(
             taskId,
@@ -83,7 +83,7 @@ class SummarizePageAgent(taskId: String, tools: AgentTools) : SubAgent(taskId, t
             needsHeavyReasoning = true,
         )
         val summary = answer.text.trim()
-        if (summary.isBlank()) return AgentResult(false, s.sumFailed)
+        if (summary.isBlank()) return AgentResult(false, s.summarize.sumFailed)
         return AgentResult(success = true, message = summary)
     }
 

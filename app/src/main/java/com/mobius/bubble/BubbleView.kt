@@ -137,7 +137,7 @@ fun BubbleView(
                     .clickable(onClick = onStopAutoScroll),
             ) {
                 Text(
-                    text = strings.inputAutoStop,
+                    text = strings.panel.inputAutoStop,
                     color = Color.White,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,

@@ -1,6 +1,9 @@
 package com.mobius.bubble
 
 import androidx.compose.foundation.layout.Arrangement
+import com.mobius.core.ApprovalDecision
+import com.mobius.core.ApprovalRequest
+import com.mobius.ui.ApprovalDialog
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -48,6 +51,11 @@ sealed interface PanelState {
     data class Plan(val skillName: String, val steps: List<String>, val decide: (Boolean) -> Unit) : PanelState
     /** (v5) Irreversible-step approval (ActionGate). */
     data class StepConfirm(val description: String, val decide: (Boolean) -> Unit) : PanelState
+    /**
+     * (v8.1) Approval bertier + grant (ActionGate): badge tier + pilihan ingat
+     * (sekali / chat ini / selamanya); SENSITIVE tidak menawarkan FOREVER.
+     */
+    data class StepConfirmGrant(val request: ApprovalRequest, val decide: (ApprovalDecision) -> Unit) : PanelState
 }
 
 /**
@@ -103,7 +111,7 @@ fun BubblePanel(
                     colors = ButtonDefaults.textButtonColors(
                         contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
                     ),
-                ) { Text(if (state is PanelState.Confirm) strings.panelCancel else strings.panelClose) }
+                ) { Text(if (state is PanelState.Confirm) strings.panel.panelCancel else strings.panel.panelClose) }
             }
             when (state) {
                 is PanelState.Input -> InputBody(
@@ -113,6 +121,10 @@ fun BubblePanel(
                 is PanelState.Confirm -> ConfirmBody(state)
                 is PanelState.Plan -> PlanBody(state)
                 is PanelState.StepConfirm -> StepConfirmBody(state)
+                is PanelState.StepConfirmGrant -> ApprovalDialog(
+                    request = state.request,
+                    onDecision = state.decide,
+                )
                 is PanelState.Result -> Text(
                     text = state.text,
                     modifier = Modifier
@@ -144,6 +156,18 @@ private fun InputBody(
     val focus = remember { FocusRequester() }
     LaunchedEffect(Unit) { focus.requestFocus() }
 
+    // v8.0 — the field clears SYNCHRONOUSLY the moment Send is hit: the
+    // text is captured in a local first, then the state is emptied, then
+    // onSubmit runs. The message still reaches the history through
+    // onSubmit exactly as before; only the timing of the clear changed —
+    // the field no longer waits for the agent's reply to empty.
+    fun submitNow() {
+        if (text.isBlank()) return
+        val sent = text
+        text = ""
+        onSubmit(sent)
+    }
+
     // v6 (M-UI): same conversation as Home (oldest first).
     if (chatHistoryOn) {
         ChatHistoryView(messages = messages)
@@ -155,10 +179,11 @@ private fun InputBody(
             modifier = Modifier
                 .weight(1f)
                 .focusRequester(focus),
-            placeholder = { Text(strings.inputPlaceholder) },
+            placeholder = { Text(strings.panel.inputPlaceholder) },
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-            keyboardActions = KeyboardActions(onSend = { if (text.isNotBlank()) onSubmit(text) }),
-            shape = RoundedCornerShape(16.dp),
+            keyboardActions = KeyboardActions(onSend = { submitNow() }),
+            // v8.0 — WhatsApp-style pill input to match the new bubbles.
+            shape = RoundedCornerShape(24.dp),
             colors = OutlinedTextFieldDefaults.colors(
                 focusedBorderColor = MaterialTheme.colorScheme.primary,
                 unfocusedBorderColor = MaterialTheme.colorScheme.outline,
@@ -173,7 +198,7 @@ private fun InputBody(
                 onVoice { heard ->
                     listening = false
                     if (heard.isNullOrBlank()) {
-                        voiceHint = strings.inputVoiceHint
+                        voiceHint = strings.panel.inputVoiceHint
                     } else {
                         onSubmit(heard)
                     }
@@ -181,10 +206,10 @@ private fun InputBody(
             },
             enabled = !listening,
             modifier = Modifier.padding(start = 8.dp),
-        ) { Text(if (listening) "..." else strings.inputMic) }
+        ) { Text(if (listening) "..." else strings.panel.inputMic) }
     }
     if (listening) {
-        Text(strings.inputListening, style = MaterialTheme.typography.bodySmall)
+        Text(strings.panel.inputListening, style = MaterialTheme.typography.bodySmall)
     }
     voiceHint?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
     // v6 (N-UI): attach goes through MainActivity's picker (a Service cannot
@@ -194,7 +219,7 @@ private fun InputBody(
         OutlinedButton(
             onClick = onAttach,
             modifier = Modifier.fillMaxWidth(),
-        ) { Text(strings.inputAttach) }
+        ) { Text(strings.panel.inputAttach) }
     }
     // v6 (G): starts the deterministic swipe loop; the panel closes so the
     // underlying app is visible, and Stop lives on the bubble itself.
@@ -202,19 +227,19 @@ private fun InputBody(
         OutlinedButton(
             onClick = onToggleAutoScroll,
             modifier = Modifier.fillMaxWidth(),
-        ) { Text(if (autoScrolling) strings.inputAutoStop else strings.inputAutoStart) }
+        ) { Text(if (autoScrolling) strings.panel.inputAutoStop else strings.panel.inputAutoStart) }
     }
     GradientButton(
-        onClick = { onSubmit(text) },
+        onClick = { submitNow() },
         enabled = text.isNotBlank(),
         modifier = Modifier.fillMaxWidth(),
-    ) { Text(strings.inputRun) }
+    ) { Text(strings.panel.inputRun) }
 }
 
 @Composable
 private fun ConfirmBody(state: PanelState.Confirm) {
     val strings = LocalStrings.current
-    Text(strings.confirmTitle.format(state.sender), style = MaterialTheme.typography.bodyMedium)
+    Text(strings.panel.confirmTitle.format(state.sender), style = MaterialTheme.typography.bodyMedium)
     Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
         Text(
             text = state.draft,
@@ -226,8 +251,8 @@ private fun ConfirmBody(state: PanelState.Confirm) {
         )
     }
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-        OutlinedButton(onClick = { state.decide(false) }, modifier = Modifier.weight(1f)) { Text(strings.confirmDontSend) }
-        GradientButton(onClick = { state.decide(true) }, modifier = Modifier.weight(1f)) { Text(strings.confirmSend) }
+        OutlinedButton(onClick = { state.decide(false) }, modifier = Modifier.weight(1f)) { Text(strings.panel.confirmDontSend) }
+        GradientButton(onClick = { state.decide(true) }, modifier = Modifier.weight(1f)) { Text(strings.panel.confirmSend) }
     }
 }
 
@@ -235,7 +260,7 @@ private fun ConfirmBody(state: PanelState.Confirm) {
 @Composable
 private fun PlanBody(state: PanelState.Plan) {
     val strings = LocalStrings.current
-    Text(strings.planTitle, style = MaterialTheme.typography.titleMedium)
+    Text(strings.panel.planTitle, style = MaterialTheme.typography.titleMedium)
     Text(state.skillName, style = MaterialTheme.typography.titleSmall)
     Column(
         modifier = Modifier
@@ -246,8 +271,8 @@ private fun PlanBody(state: PanelState.Plan) {
         state.steps.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
     }
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-        OutlinedButton(onClick = { state.decide(false) }, modifier = Modifier.weight(1f)) { Text(strings.planCancel) }
-        GradientButton(onClick = { state.decide(true) }, modifier = Modifier.weight(1f)) { Text(strings.planRun) }
+        OutlinedButton(onClick = { state.decide(false) }, modifier = Modifier.weight(1f)) { Text(strings.panel.planCancel) }
+        GradientButton(onClick = { state.decide(true) }, modifier = Modifier.weight(1f)) { Text(strings.panel.planRun) }
     }
 }
 
@@ -255,11 +280,11 @@ private fun PlanBody(state: PanelState.Plan) {
 @Composable
 private fun StepConfirmBody(state: PanelState.StepConfirm) {
     val strings = LocalStrings.current
-    Text(strings.stepTitle, style = MaterialTheme.typography.titleMedium)
+    Text(strings.panel.stepTitle, style = MaterialTheme.typography.titleMedium)
     Text(state.description, style = MaterialTheme.typography.bodyMedium)
-    Text(strings.stepQuestion, style = MaterialTheme.typography.bodyMedium)
+    Text(strings.panel.stepQuestion, style = MaterialTheme.typography.bodyMedium)
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-        OutlinedButton(onClick = { state.decide(false) }, modifier = Modifier.weight(1f)) { Text(strings.stepCancel) }
-        GradientButton(onClick = { state.decide(true) }, modifier = Modifier.weight(1f)) { Text(strings.stepContinue) }
+        OutlinedButton(onClick = { state.decide(false) }, modifier = Modifier.weight(1f)) { Text(strings.panel.stepCancel) }
+        GradientButton(onClick = { state.decide(true) }, modifier = Modifier.weight(1f)) { Text(strings.panel.stepContinue) }
     }
 }

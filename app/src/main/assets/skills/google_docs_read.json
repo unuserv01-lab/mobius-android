@@ -1,0 +1,38 @@
+{
+    "description": "Baca isi sebuah Google Doc berdasarkan namanya: cari dulu di Drive, lalu baca dokumen yang paling cocok.",
+    "id": "google_docs_read",
+    "maxSteps": 5,
+    "name": "Baca dokumen (Docs)",
+    "params": [
+        {
+            "name": "query",
+            "required": true
+        }
+    ],
+    "steps": [
+        {
+            "args": {
+                "mimeType": "application/vnd.google-apps.document",
+                "query": "$query"
+            },
+            "storeAs": "files",
+            "tool": "driveSearch"
+        },
+        {
+            "args": {
+                "docId": "$files.0"
+            },
+            "storeAs": "doc",
+            "tool": "docsRead",
+            "when": "vars.files.0"
+        }
+    ],
+    "summarize": true,
+    "timeoutMs": 60000,
+    "triggers": [
+        "baca doc",
+        "baca dokumen",
+        "baca file",
+        "isi dokumen"
+    ]
+}

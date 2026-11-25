@@ -74,7 +74,7 @@ suspend fun processPickedFile(
     val localFilesOn =
         runCatching { app.featureFlags.isEnabled(FeatureFlag.LOCAL_FILES).first() }.getOrDefault(true)
     if (!localFilesOn) {
-        return AttachResult.Failed(strings.attachDisabled)
+        return AttachResult.Failed(strings.attach.attachDisabled)
     }
     val alertOn =
         runCatching { app.featureFlags.isEnabled(FeatureFlag.SENSITIVE_ALERT).first() }.getOrDefault(true)
@@ -114,9 +114,9 @@ suspend fun processPickedFile(
             else AttachResult.Ready(file)
         }
     } catch (e: FileExtractionException) {
-        AttachResult.Failed(e.message ?: strings.attachExtractFailed)
+        AttachResult.Failed(e.message ?: strings.attach.attachExtractFailed)
     } catch (_: Exception) {
-        AttachResult.Failed(strings.attachExtractFailed)
+        AttachResult.Failed(strings.attach.attachExtractFailed)
     }
 }
 

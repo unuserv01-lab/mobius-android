@@ -1,0 +1,35 @@
+{
+    "description": "Baca email terbaru dari Gmail, atau cari email dengan kata kunci. Tanpa kata kunci, menampilkan email terbaru.",
+    "id": "google_gmail_read",
+    "maxSteps": 5,
+    "name": "Baca email (Gmail)",
+    "params": [
+        {
+            "default": "",
+            "name": "query",
+            "required": false
+        }
+    ],
+    "steps": [
+        {
+            "args": {
+                "maxResults": "5",
+                "query": "$query"
+            },
+            "storeAs": "emails",
+            "tool": "gmailSearch"
+        }
+    ],
+    "summarize": true,
+    "timeoutMs": 60000,
+    "triggers": [
+        "ada email baru",
+        "baca email",
+        "baca gmail",
+        "cari email",
+        "cek email",
+        "email terbaru",
+        "gmail",
+        "inbox"
+    ]
+}

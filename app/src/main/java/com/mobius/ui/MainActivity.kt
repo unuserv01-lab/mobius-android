@@ -1,82 +1,50 @@
 package com.mobius.ui
 
 import android.content.Intent
-import android.net.Uri
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.Image
+import androidx.lifecycle.lifecycleScope
+import com.mobius.ai.GoogleAuth
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
 import androidx.compose.material3.ColorScheme
+import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
-import androidx.compose.material3.Scaffold
+import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.rememberDrawerState
+import androidx.compose.ui.Alignment
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.mobius.MobiusApp
-import com.mobius.R
-import com.mobius.ai.VoiceOutput
-import com.mobius.bubble.BubbleService
-import com.mobius.bubble.VoiceInput
-import com.mobius.core.AppConfig
-import com.mobius.core.FeatureFlag
-import com.mobius.core.FilePickerHelper
-import com.mobius.core.PermissionStatus
-import com.mobius.core.TaskHooks
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -171,6 +139,33 @@ fun GradientButton(
     )
 }
 
+/**
+ * v8.1-hotfix — top bar for the sub-screens (Settings, Log, Chat History):
+ * a visible back arrow + title. Tapping the arrow (or the phone Back
+ * button, see MainTabs) returns to HOME instead of closing the app.
+ */
+@Composable
+fun BackTopBar(title: String, onBack: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconButton(onClick = onBack) {
+            Icon(
+                imageVector = MobiusBackIcon,
+                contentDescription = "Kembali",
+                tint = MaterialTheme.colorScheme.onSurface,
+            )
+        }
+        Text(
+            title,
+            style = MaterialTheme.typography.titleLarge,
+            color = MaterialTheme.colorScheme.tertiary,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
 // ------------------------------------------------------------------ bottom-nav icons
 //
 // Drawn from the canonical Material path data (ImageVector.Builder) so the
@@ -224,12 +219,17 @@ private const val MIC_PATH_DATA_1 =
 private const val MIC_PATH_DATA_2 =
     "M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"
 
+// v8.1-hotfix — canonical Material arrow_back path data (same no-new-dependency
+// pattern as the other icons): the back arrow for the sub-screen top bars.
+private const val BACK_PATH_DATA = "M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"
+
 val MobiusChatIcon: ImageVector by lazy { mobiusIcon("Chat", CHAT_PATH_DATA) }
 val MobiusTagIcon: ImageVector by lazy { mobiusIcon("Tag", TAG_PATH_DATA) }
 val MobiusDocIcon: ImageVector by lazy { mobiusIcon("Doc", DOC_PATH_DATA) }
 val MobiusSearchIcon: ImageVector by lazy { mobiusIcon("Search", SEARCH_PATH_DATA) }
 val MobiusSparkleIcon: ImageVector by lazy { mobiusIcon("Sparkle", SPARKLE_PATH_DATA) }
 val MobiusMicIcon: ImageVector by lazy { mobiusIcon("Mic", MIC_PATH_DATA_1, MIC_PATH_DATA_2) }
+val MobiusBackIcon: ImageVector by lazy { mobiusIcon("Back", BACK_PATH_DATA) }
 
 // ------------------------------------------------------------------ activity
 
@@ -244,6 +244,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // v7.9-auth: Google Sign-In needs a Context once per process.
+        GoogleAuth.init(this)
+        // v7.9-auth: the browser returns from Google Sign-In via the
+        // com.mobius:/oauth2redirect deep link, which lands here.
+        handleAuthRedirect(intent)
         if (intent?.getBooleanExtra(EXTRA_OPEN_FILE_PICKER, false) == true) {
             pickFileRequests.value++
         }
@@ -252,8 +257,28 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        setIntent(intent)
+        // v7.9-auth: redirect may arrive while the activity already exists.
+        handleAuthRedirect(intent)
         if (intent.getBooleanExtra(EXTRA_OPEN_FILE_PICKER, false)) {
             pickFileRequests.value++
+        }
+    }
+
+    /**
+     * v7.9-auth: forwards a Google Sign-In redirect to [GoogleAuth]. Only
+     * intents with the com.mobius scheme are forwarded; everything else
+     * (file picker, launcher) is untouched. The sign-in result itself is
+     * NOT shown here — the Settings screen (Google sign-in UI) re-reads
+     * GoogleAuth.isSignedIn() / accountEmail(). The outcome is only logged
+     * as true/false, never with any token or code.
+     */
+    private fun handleAuthRedirect(intent: Intent?) {
+        val uri = intent?.data ?: return
+        if (uri.scheme != GoogleAuth.REDIRECT_SCHEME) return
+        lifecycleScope.launch {
+            val ok = runCatching { GoogleAuth.handleRedirect(uri) }.getOrDefault(false)
+            Log.i("MainActivity", "Google sign-in redirect handled: $ok")
         }
     }
 
@@ -271,7 +296,10 @@ private fun MobiusRoot(pickFileRequests: StateFlow<Int>) {
     // recomposes everywhere immediately — no restart, no reinstall.
     val languageManager = remember { LanguageManager(app.applicationContext) }
     val lang by languageManager.language.collectAsState(initial = AppLanguage.ID)
-    CompositionLocalProvider(LocalStrings provides stringsFor(lang)) {
+    val strings = stringsFor(lang)
+    // v8.1 — core (RemoteGateway) reads the same language as the UI.
+    SideEffect { currentStrings = strings }
+    CompositionLocalProvider(LocalStrings provides strings) {
         Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
             when (onboardingDone) {
                 null -> Unit // still reading preferences
@@ -284,607 +312,53 @@ private fun MobiusRoot(pickFileRequests: StateFlow<Int>) {
 
 @Composable
 private fun MainTabs(app: MobiusApp, pickFileRequests: StateFlow<Int>) {
-    val strings = LocalStrings.current
-    var tab by remember { mutableStateOf(0) }
-    val labels = listOf(strings.tabHome, strings.tabHistory, strings.tabSettings)
-    val icons = listOf(MobiusHomeIcon, MobiusHistoryIcon, MobiusSettingsIcon)
-    Scaffold(
-        bottomBar = {
-            NavigationBar {
-                labels.forEachIndexed { index, label ->
-                    NavigationBarItem(
-                        selected = tab == index,
-                        onClick = { tab = index },
-                        icon = {
-                            Icon(
-                                imageVector = icons[index],
-                                contentDescription = label,
-                            )
-                        },
-                        label = { Text(label) },
-                    )
-                }
-            }
-        }
-    ) { padding ->
-        Box(Modifier.padding(padding)) {
-            when (tab) {
-                0 -> HomeScreen(app, pickFileRequests)
-                1 -> HistoryScreen(app)
-                else -> SettingsScreen(app, onRerunSetup = { })
-            }
-        }
-    }
-}
-
-/**
- * Launcher-side entry point. It uses the SAME Orchestrator as the bubble, so MOBIUS works even when
- * the overlay permission is denied ("app works from launcher only").
- */
-@Composable
-private fun HomeScreen(app: MobiusApp, pickFileRequests: StateFlow<Int>) {
-    val strings = LocalStrings.current
-    val context = LocalContext.current
+    var destination by remember { mutableStateOf(MobiusDestination.HOME) }
+    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
-    val perms by rememberPermissionStatus(app.permissions)
-    val bubbleOn by app.permissions.bubbleEnabled.collectAsState(initial = false)
-    // v6 flags (Compose: collectAsState, default true).
-    val chatHistoryOn by app.featureFlags.isEnabled(FeatureFlag.CHAT_HISTORY).collectAsState(initial = true)
-    val localFilesOn by app.featureFlags.isEnabled(FeatureFlag.LOCAL_FILES).collectAsState(initial = true)
-    val chatMessages by app.memoryStore.observeChatMessages().collectAsState(initial = emptyList())
-
-    var input by remember { mutableStateOf("") }
-    var status by remember { mutableStateOf<String?>(null) }
-    var result by remember { mutableStateOf<String?>(null) }
-    var resultOk by remember { mutableStateOf<Boolean?>(null) }
-    var running by remember { mutableStateOf(false) }
-    // v7.6 — voice input on Home (same SpeechRecognizer as the bubble).
-    var listening by remember { mutableStateOf(false) }
-    var voiceHint by remember { mutableStateOf<String?>(null) }
-    var pendingConfirm by remember { mutableStateOf<Triple<String, String, CompletableDeferred<Boolean>>?>(null) }
-    // v5: plan card ("Langkah yang akan dijalankan") + irreversible-step approval.
-    var pendingPlan by remember { mutableStateOf<Triple<String, List<String>, CompletableDeferred<Boolean>>?>(null) }
-    var pendingStep by remember { mutableStateOf<Pair<String, CompletableDeferred<Boolean>>?>(null) }
-    // v6 (F): voice output — speaks the assistant's short result after it is shown.
-    val voiceOutput = remember { VoiceOutput(context).also { it.start() } }
-    DisposableEffect(Unit) { onDispose { voiceOutput.shutdown() } }
-    // v6 (N-UI + O-ALERT): staged file + sensitive-data confirmation + error.
-    var attachedFile by remember { mutableStateOf<AttachedFileData?>(null) }
-    var pendingAttachConfirm by remember { mutableStateOf<Pair<AttachedFileData, List<com.mobius.core.SensitiveFinding>>?>(null) }
-    var attachError by remember { mutableStateOf<String?>(null) }
-    val pickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
-        if (uri == null) return@rememberLauncherForActivityResult
-        scope.launch {
-            when (val r = processPickedFile(context, uri, app, strings)) {
-                is AttachResult.Ready -> {
-                    attachedFile = r.file
-                    attachError = null
-                }
-                is AttachResult.NeedsConfirm -> {
-                    pendingAttachConfirm = r.file to r.findings
-                    attachError = null
-                }
-                is AttachResult.Failed -> attachError = r.message
-            }
-        }
-    }
-    // v6: the bubble's attach button asks Home to open the picker (a Service
-    // cannot receive ACTION_OPEN_DOCUMENT results). Counts only upward, so a
-    // request is never re-fired by recomposition.
-    LaunchedEffect(pickFileRequests) {
-        pickFileRequests.collect { count ->
-            if (count > 0) pickerLauncher.launch(FilePickerHelper.SUPPORTED_MIME_TYPES)
-        }
-    }
-
-    val hooks = remember {
-        object : TaskHooks {
-            override fun status(message: String) { status = message }
-            override suspend fun confirmSend(sender: String, draft: String): Boolean {
-                val decision = CompletableDeferred<Boolean>()
-                pendingConfirm = Triple(sender, draft, decision)
-                return decision.await().also { pendingConfirm = null }
-            }
-            override suspend fun confirmPlan(skillName: String, steps: List<String>): Boolean {
-                val decision = CompletableDeferred<Boolean>()
-                pendingPlan = Triple(skillName, steps, decision)
-                return decision.await().also { pendingPlan = null }
-            }
-            override suspend fun confirmStep(description: String): Boolean {
-                val decision = CompletableDeferred<Boolean>()
-                pendingStep = Pair(description, decision)
-                return decision.await().also { pendingStep = null }
-            }
-        }
-    }
-
-    // v7.6 — ONE submit path for the Run button, the keyboard Send action,
-    // the mic result, and the "Ringkas WA grup" chip. The optional callback
-    // reports the outcome so a chip can add its own follow-up. The staged
-    // file (v6 N-UI) is consumed here exactly as the old Run button did it.
-    fun submitTask(rawText: String, onDone: (suspend (Boolean) -> Unit)? = null) {
-        if (rawText.isBlank() || running) return
-        running = true
-        result = null
-        resultOk = null
-        voiceOutput.stop() // v6 (F): a new task starts — stop any speech.
-        // v6 (N-UI): the staged file is consumed now — its text is
-        // prepended as a delimited DATA block (never instructions) and the
-        // task still goes through orchestrator.submit(), so ActionGate and
-        // every other gate still apply.
-        val file = attachedFile
-        attachedFile = null
-        val submitText = if (file != null) {
-            buildFileDataBlock(file) + "\n\n" + rawText
+    // v8.1-hotfix bug 2 — Back goes to HOME from any sub-screen instead of
+    // closing the app. When the drawer is open, Back closes the drawer first
+    // (ModalNavigationDrawer's own handler wins while open; this one covers
+    // the closed-drawer case). On HOME, Back keeps its default (exit app).
+    BackHandler(enabled = drawerState.isOpen || destination != MobiusDestination.HOME) {
+        if (drawerState.isOpen) {
+            scope.launch { drawerState.close() }
         } else {
-            rawText
-        }
-        val userRecord = if (file != null) {
-            "$rawText\n[File terlampir: ${file.fileName}]"
-        } else {
-            rawText
-        }
-        scope.launch {
-            var ok = false
-            try {
-                // v6 (M-UI): record both turns; no-op when CHAT_HISTORY is OFF.
-                app.memoryStore.addChatMessage("user", userRecord)
-                val outcome = app.orchestrator.submit(submitText, hooks)
-                result = outcome.message
-                resultOk = outcome.success
-                ok = outcome.success
-                app.memoryStore.addChatMessage("assistant", outcome.message)
-                // v6 (F): speak the assistant's short result (no-op when
-                // VOICE_OUTPUT is OFF; never speaks other people's messages).
-                voiceOutput.speak(outcome.message)
-            } catch (e: Exception) {
-                // submit() already converts AI failures into outcomes, but never
-                // let a stray exception kill the app from this button.
-                result = strings.homeErrorPrefix + (e.message ?: e.javaClass.simpleName)
-                resultOk = false
-            } finally {
-                status = null
-                running = false
-                onDone?.invoke(ok)
-            }
+            destination = MobiusDestination.HOME
         }
     }
-
-    // v7.6 — "Ringkas WA grup": there is NO direct WA-history reader in the
-    // app, so the chip does the nearest real thing — it opens WhatsApp
-    // through the planning loop (KnownApps → com.whatsapp), then records
-    // the next step: open the group chat and ask the bubble to summarize
-    // the visible page (SummarizePageAgent reads the screen). Nothing is
-    // faked: if WhatsApp is missing, the launch outcome says so and no
-    // guidance message is recorded.
-    fun runWaGroupChip() {
-        submitTask(strings.chipWaOpen) { ok ->
-            if (ok) {
-                app.memoryStore.addChatMessage("assistant", strings.chipWaNext)
-            }
-        }
-    }
-
-    Column(
-        Modifier.verticalScroll(rememberScrollState()).padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        drawerContent = {
+            MobiusDrawer(
+                app = app,
+                currentDestination = destination,
+                onNavigate = { destination = it },
+                onCloseDrawer = { scope.launch { drawerState.close() } },
+            )
+        },
     ) {
-        // v7.6 — mockup header: the real logo mark + gradient MOBIUS + tagline.
-        // (No hamburger: there is no drawer. No "A" avatar: there is no profile.)
-        Column(
-            Modifier.fillMaxWidth(),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(64.dp)
-                        .clip(CircleShape)
-                        .background(MobiusGradientBrush),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Image(
-                        painter = painterResource(id = R.drawable.ic_launcher_foreground),
-                        contentDescription = "MOBIUS",
-                        modifier = Modifier.size(56.dp).clip(CircleShape),
-                    )
-                }
-                Text(
-                    AppConfig.APP_NAME,
-                    style = MaterialTheme.typography.headlineLarge.copy(
-                        brush = MobiusGradientBrush,
-                        fontWeight = FontWeight.Bold,
-                    ),
+        // v8.1-hotfix bug 1 — root fix: Compose's LocalContentColor defaults
+        // to BLACK, and no Scaffold/Surface in this tree ever provided
+        // onSurface, so every Text() without an explicit color rendered
+        // black on the dark background. Provide onSurface here (exactly what
+        // a Scaffold does) so no text in any sub-screen can fall back to
+        // black again. Components that set their own content color
+        // (buttons, chips, cards, drawer items) override this locally.
+        CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onSurface) {
+            when (destination) {
+                MobiusDestination.HOME -> HomeScreen(
+                    app,
+                    pickFileRequests,
+                    onOpenDrawer = { scope.launch { drawerState.open() } },
+                    onOpenSettings = {
+                        destination = MobiusDestination.SETTINGS
+                        scope.launch { drawerState.close() }
+                    },
                 )
+                MobiusDestination.CHAT_HISTORY -> ChatHistoryScreen(app, onBack = { destination = MobiusDestination.HOME })
+                MobiusDestination.LOG -> LogScreen(app, onBack = { destination = MobiusDestination.HOME })
+                MobiusDestination.SETTINGS -> SettingsScreen(app, onRerunSetup = { }, onBack = { destination = MobiusDestination.HOME })
             }
-            Text(
-                AppConfig.TAGLINE,
-                style = MaterialTheme.typography.bodyMedium.copy(brush = MobiusGradientBrush),
-                textAlign = TextAlign.Center,
-            )
-        }
-
-        // v7.6 — greeting card, like the mockup: loop avatar + "Halo!".
-        Card(
-            Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            border = androidx.compose.foundation.BorderStroke(
-                1.dp, MaterialTheme.colorScheme.outline,
-            ),
-        ) {
-            Row(
-                Modifier.padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(CircleShape)
-                        .background(MobiusGradientBrush),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Image(
-                        painter = painterResource(id = R.drawable.ic_launcher_foreground),
-                        contentDescription = "MOBIUS",
-                        modifier = Modifier.size(36.dp).clip(CircleShape),
-                    )
-                }
-                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(
-                        strings.homeGreetingTitle,
-                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
-                    )
-                    Text(
-                        strings.homeGreetingBody,
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                }
-            }
-        }
-
-        // v7.6 — quick chips (2x2). "Analisis harga" / "Buat laporan" /
-        // "Cari informasi" prefill the input so the user completes the
-        // prompt — they never claim a result before the task runs.
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                QuickChip(
-                    MobiusChatIcon, strings.chipWaGroup, Modifier.weight(1f),
-                    enabled = !running,
-                ) { runWaGroupChip() }
-                QuickChip(
-                    MobiusTagIcon, strings.chipPrice, Modifier.weight(1f),
-                    enabled = !running,
-                ) { input = strings.chipPricePrefill }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                QuickChip(
-                    MobiusDocIcon, strings.chipReport, Modifier.weight(1f),
-                    enabled = !running,
-                ) { input = strings.chipReportPrefill }
-                QuickChip(
-                    MobiusSearchIcon, strings.chipSearch, Modifier.weight(1f),
-                    enabled = !running,
-                ) { input = strings.chipSearchPrefill }
-            }
-        }
-
-        Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(strings.homeFloatingBubble, style = MaterialTheme.typography.titleMedium)
-                if (!perms.overlay) {
-                    Text(strings.homeBubbleNoOverlay, style = MaterialTheme.typography.bodySmall)
-                }
-                if (bubbleOn && BubbleService.running) {
-                    OutlinedButton(onClick = {
-                        BubbleService.stop(context)
-                        scope.launch { app.permissions.setBubbleEnabled(false) }
-                    }) { Text(strings.homeStopBubble) }
-                } else {
-                    GradientButton(onClick = {
-                        scope.launch { app.permissions.setBubbleEnabled(true) }
-                        BubbleService.start(context)
-                    }) { Text(strings.homeStartBubble) }
-                }
-            }
-        }
-
-        Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(strings.homeAsk, style = MaterialTheme.typography.titleMedium)
-                // v6 (M-UI): same conversation as the bubble; hidden when CHAT_HISTORY is OFF.
-                if (chatHistoryOn) {
-                    ChatHistoryView(messages = chatMessages)
-                }
-                // v7.6 — mockup input pill: sparkle icon, mic button, Send key
-                // submits. Voice uses the same SpeechRecognizer as the bubble;
-                // null = not heard/denied, type instead.
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedTextField(
-                        value = input,
-                        onValueChange = { input = it },
-                        modifier = Modifier.weight(1f),
-                        placeholder = { Text(strings.homePlaceholder) },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = MobiusSparkleIcon,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.tertiary,
-                            )
-                        },
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                        keyboardActions = KeyboardActions(
-                            onSend = { if (input.isNotBlank()) submitTask(input) },
-                        ),
-                        shape = RoundedCornerShape(28.dp),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = MaterialTheme.colorScheme.primary,
-                            unfocusedBorderColor = MaterialTheme.colorScheme.outline,
-                            cursorColor = MaterialTheme.colorScheme.primary,
-                        ),
-                    )
-                    Box(
-                        modifier = Modifier
-                            .padding(start = 8.dp)
-                            .size(48.dp)
-                            .clip(CircleShape)
-                            .background(MobiusGradientBrush)
-                            .clickable(enabled = !listening && !running) {
-                                listening = true
-                                voiceHint = null
-                                scope.launch {
-                                    val heard = VoiceInput.listenOnce(context)
-                                    listening = false
-                                    if (heard.isNullOrBlank()) {
-                                        voiceHint = strings.inputVoiceHint
-                                    } else {
-                                        input = heard
-                                        submitTask(heard)
-                                    }
-                                }
-                            },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(
-                            imageVector = MobiusMicIcon,
-                            contentDescription = strings.inputMic,
-                            tint = Color.White,
-                            modifier = Modifier.size(24.dp),
-                        )
-                    }
-                }
-                if (listening) {
-                    Text(strings.inputListening, style = MaterialTheme.typography.bodySmall)
-                }
-                voiceHint?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-                // v6 (N-UI): attach a file/photo via the system picker (no broad
-                // storage permission). Hidden when LOCAL_FILES is OFF (v5: no attach).
-                if (localFilesOn) {
-                    OutlinedButton(
-                        onClick = { pickerLauncher.launch(FilePickerHelper.SUPPORTED_MIME_TYPES) },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) { Text(strings.homeAttach) }
-                }
-                attachedFile?.let { file ->
-                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                        Text(
-                            strings.homeFilePrefix + file.fileName +
-                                if (file.isImage) strings.homePhotoUnverified
-                                else if (file.truncated) strings.homeTruncated
-                                else "",
-                            Modifier.weight(1f),
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                        TextButton(
-                            onClick = { attachedFile = null },
-                            colors = ButtonDefaults.textButtonColors(
-                                contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                            ),
-                        ) { Text(strings.homeRemove) }
-                    }
-                }
-                attachError?.let {
-                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                }
-                GradientButton(
-                    enabled = input.isNotBlank() && !running,
-                    onClick = { submitTask(input) },
-                    modifier = Modifier.fillMaxWidth(),
-                ) { Text(if (running) strings.homeWorking else strings.homeRun) }
-                status?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-                result?.let {
-                    val resultColor = when (resultOk) {
-                        true -> MobiusSuccess
-                        false -> MaterialTheme.colorScheme.error
-                        null -> MaterialTheme.colorScheme.onSurface
-                    }
-                    Text(it, color = resultColor)
-                }
-            }
-        }
-
-        Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(strings.homeCapabilities, style = MaterialTheme.typography.titleMedium)
-                CapabilityRow(strings.capBubble, perms.overlay)
-                // v7.7 bug 3 — three states: OFF / ON-but-service-not-running / live.
-                CapabilityRowA11y(app, perms)
-                CapabilityRow(strings.capNotifications, perms.notificationListener)
-                CapabilityRow(strings.capUsage, perms.usageStats)
-                CapabilityRow(strings.capMicrophone, perms.microphone)
-            }
-        }
-    }
-
-    pendingConfirm?.let { (sender, draft, decision) ->
-        AlertDialog(
-            onDismissRequest = { decision.complete(false) },
-            title = { Text(strings.dlgSendTitle.format(sender)) },
-            text = { Text(draft) },
-            confirmButton = {
-                GradientButton(onClick = { decision.complete(true) }) { Text(strings.dlgSend) }
-            },
-            dismissButton = {
-                TextButton(
-                    onClick = { decision.complete(false) },
-                    colors = ButtonDefaults.textButtonColors(
-                        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                    ),
-                ) { Text(strings.dlgDontSend) }
-            },
-        )
-    }
-
-    pendingPlan?.let { (skillName, steps, decision) ->
-        AlertDialog(
-            onDismissRequest = { decision.complete(false) },
-            title = { Text(strings.dlgPlanTitle) },
-            text = {
-                Column(Modifier.verticalScroll(rememberScrollState()).heightIn(max = 320.dp)) {
-                    Text(skillName, style = MaterialTheme.typography.titleSmall)
-                    steps.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
-                }
-            },
-            confirmButton = {
-                GradientButton(onClick = { decision.complete(true) }) { Text(strings.dlgPlanRun) }
-            },
-            dismissButton = {
-                TextButton(
-                    onClick = { decision.complete(false) },
-                    colors = ButtonDefaults.textButtonColors(
-                        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                    ),
-                ) { Text(strings.dlgPlanCancel) }
-            },
-        )
-    }
-
-    pendingStep?.let { (description, decision) ->
-        AlertDialog(
-            onDismissRequest = { decision.complete(false) },
-            title = { Text(strings.dlgStepTitle) },
-            text = { Text(description + "\n\n" + strings.dlgStepQuestion) },
-            confirmButton = {
-                GradientButton(onClick = { decision.complete(true) }) { Text(strings.dlgStepContinue) }
-            },
-            dismissButton = {
-                TextButton(
-                    onClick = { decision.complete(false) },
-                    colors = ButtonDefaults.textButtonColors(
-                        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                    ),
-                ) { Text(strings.dlgStepCancel) }
-            },
-        )
-    }
-
-    // v6 (O-ALERT): the file is NOT passed on until the user confirms.
-    // Only the finding TYPES are named — never a matched value.
-    pendingAttachConfirm?.let { (file, findings) ->
-        AlertDialog(
-            onDismissRequest = { pendingAttachConfirm = null },
-            title = { Text(strings.dlgAttachTitle) },
-            text = {
-                Text(strings.dlgAttachBody.format(findings.joinToString(", ") { it.type }))
-            },
-            confirmButton = {
-                GradientButton(onClick = {
-                    attachedFile = file
-                    pendingAttachConfirm = null
-                }) { Text(strings.dlgAttachKeep) }
-            },
-            dismissButton = {
-                TextButton(
-                    onClick = { pendingAttachConfirm = null },
-                    colors = ButtonDefaults.textButtonColors(
-                        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                    ),
-                ) { Text(strings.dlgAttachCancel) }
-            },
-        )
-    }
-}
-
-@Composable
-private fun QuickChip(
-    icon: ImageVector,
-    label: String,
-    modifier: Modifier = Modifier,
-    enabled: Boolean = true,
-    onClick: () -> Unit,
-) {
-    OutlinedButton(
-        onClick = onClick,
-        enabled = enabled,
-        modifier = modifier.heightIn(min = 48.dp),
-        shape = RoundedCornerShape(16.dp),
-    ) {
-        Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(20.dp))
-        Spacer(Modifier.width(8.dp))
-        Text(label, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
-    }
-}
-
-@Composable
-private fun CapabilityRow(label: String, on: Boolean) {
-    val strings = LocalStrings.current
-    Row(Modifier.fillMaxWidth()) {
-        Text(label, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
-        Text(
-            if (on) strings.capOn else strings.capOff,
-            color = if (on) MobiusSuccess else MaterialTheme.colorScheme.error,
-            style = MaterialTheme.typography.labelLarge,
-        )
-    }
-}
-
-/**
- * v7.7 bug 3 — accessibility is a THREE-state capability. The toggle can be
- * ON while the service itself is not running (after an APK update, or killed
- * by MIUI) — showing plain "on" for that state is what misled Tuan. The
- * mismatch state shows what to do and a button straight to system Settings.
- * The row refreshes on ON_RESUME (rememberPermissionStatus), i.e. right
- * after the user comes back from Settings.
- */
-@Composable
-private fun CapabilityRowA11y(app: MobiusApp, perms: PermissionStatus) {
-    val strings = LocalStrings.current
-    val context = LocalContext.current
-    val mismatch = perms.accessibility && !perms.accessibilityLive
-    Column(Modifier.fillMaxWidth()) {
-        Row(Modifier.fillMaxWidth()) {
-            Text(
-                strings.capAccessibility,
-                Modifier.weight(1f),
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            Text(
-                when {
-                    !perms.accessibility -> strings.capOff
-                    perms.accessibilityLive -> strings.capOn
-                    else -> strings.capNeedsFix
-                },
-                color = when {
-                    !perms.accessibility -> MaterialTheme.colorScheme.error
-                    perms.accessibilityLive -> MobiusSuccess
-                    else -> MobiusWarning
-                },
-                style = MaterialTheme.typography.labelLarge,
-            )
-        }
-        if (mismatch) {
-            Text(
-                strings.capA11yNotRunning,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            OutlinedButton(
-                onClick = { context.startActivity(app.permissions.accessibilitySettingsIntent()) },
-            ) { Text(strings.obOpenSettings) }
         }
     }
 }

@@ -4,6 +4,8 @@ import android.os.SystemClock
 import com.mobius.ai.PromptBuilder
 import com.mobius.core.ActionGate
 import com.mobius.core.AppConfig
+import com.mobius.core.ApprovalDecision
+import com.mobius.core.ApprovalRequest
 import com.mobius.core.GateDecision
 import com.mobius.core.GateDecisionRecord
 import com.mobius.core.KnownApps
@@ -58,6 +60,13 @@ class PlanningAgent(
     private val tool: Tool?,
     private val screenLock: Mutex,
     private val onConfirmStep: (suspend (String) -> Boolean)? = null,
+    /**
+     * (v8.1-integrasi) Hook approval bertier — sama seperti di SkillRunner:
+     * bila ada, tier + actionKey asli dari [GateResult] diteruskan (grant
+     * MODERATE bisa diingat); bila null, fallback ke [onConfirmStep] Boolean
+     * (semua NEEDS_APPROVAL diperlakukan SENSITIVE, fail-closed).
+     */
+    private val onConfirmStepWithGrant: (suspend (ApprovalRequest) -> ApprovalDecision)? = null,
     private val codeExecutor: (suspend (String) -> AgentResult)? = null,
     private val maxSteps: Int = DEFAULT_MAX_STEPS,
     private val timeoutMs: Long = DEFAULT_TIMEOUT_MS,
@@ -73,6 +82,10 @@ class PlanningAgent(
     /** Step results + gate decisions, in order — the Orchestrator persists these to the trail. */
     val steps = mutableListOf<StepResult>()
     val gateDecisions = mutableListOf<GateDecisionRecord>()
+
+    /** v8.1 — per-run anti-loop guards (repeat / no-effect / error). Additive only: the
+     *  3-strike abort, 15-step cap and 5-minute timeout below are untouched. */
+    private val guards = ExecutionGuards()
 
     override suspend fun execute(ctx: TaskContext, intent: RoutedIntent): AgentResult {
         val tool = this.tool
@@ -154,6 +167,12 @@ class PlanningAgent(
                 if (result.success) consecutiveFailures = 0 else if (++consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
                     return AgentResult(false, "Planning stopped after $MAX_CONSECUTIVE_FAILURES failed code steps: ${result.message}")
                 }
+                // v8.1 guard (no screen for a code step: only repeat + error apply).
+                when (val verdict = guards.record("code", mapOf("task" to codeTask), result.success, null, null)) {
+                    is ExecutionGuards.GuardVerdict.Stop -> return AgentResult(false, verdict.reason)
+                    is ExecutionGuards.GuardVerdict.Nudge -> history += verdict.message
+                    ExecutionGuards.GuardVerdict.Allow -> Unit
+                }
                 continue
             }
 
@@ -197,6 +216,11 @@ class PlanningAgent(
                         val draft = lastTypedText?.takeIf { it.isNotBlank() }
                             ?: "Kirim di ${pkg ?: "aplikasi ini"}"
                         tools.confirmSend(pkg ?: "app", draft)
+                    } else if (onConfirmStepWithGrant != null) {
+                        // (v8.1-integrasi) Tier + actionKey asli diteruskan.
+                        onConfirmStepWithGrant.invoke(
+                            ApprovalRequest(desc, gate.tier, gate.actionKey, "local"),
+                        ).approved
                     } else {
                         onConfirmStep?.invoke(desc) ?: false // no hook = deny (fail closed)
                     }
@@ -213,6 +237,9 @@ class PlanningAgent(
             }
 
             // --- Execute: the screen lock serializes this with other workers' screen use. ---
+            // v8.1: keep the screen summary from BEFORE the call — the no-effect guard
+            // compares it with the summary observed afterwards.
+            val screenBefore = screenSummary
             val started = SystemClock.elapsedRealtime()
             val result = try {
                 screenLock.withLock { callTool(tool, toolName, args, pkg) }
@@ -232,6 +259,16 @@ class PlanningAgent(
             }
             // Observe again for the next iteration (also under the screen lock).
             screenSummary = observe(tool, ctx)
+            // --- v8.1 guards (additive): repeat / no-effect / error thresholds. The
+            // 3-strike abort above still fires first on failures; a guard Stop here
+            // only ends a run the existing controls would otherwise let continue
+            // (e.g. successful taps that change nothing). A Nudge goes into the
+            // history so the next planning prompt carries the warning to the model.
+            when (val verdict = guards.record(toolName, args, result.success, screenBefore, screenSummary)) {
+                is ExecutionGuards.GuardVerdict.Stop -> return AgentResult(false, verdict.reason)
+                is ExecutionGuards.GuardVerdict.Nudge -> history += verdict.message
+                ExecutionGuards.GuardVerdict.Allow -> Unit
+            }
             delay(200) // let the screen settle before the next observation
         }
         return AgentResult(
@@ -325,7 +362,7 @@ class PlanningAgent(
         val s = stringsFor(tools.language)
         val pkg = args["package"].orEmpty()
         val display = KnownApps.displayName(pkg) ?: pkg.ifBlank { "?" }
-        return s.planLaunchFailed.format(display, pkg)
+        return s.summarize.planLaunchFailed.format(display, pkg)
     }
 
     /** Parses one LLM step: {"done": bool, "summary"?, "tool"?, "args"?}. Null = unparsable. */
