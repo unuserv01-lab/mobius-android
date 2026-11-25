@@ -2583,3 +2583,161 @@ izin, dependensi, rantai fallback OpenRouter, timeout cloud 30 dtk, batas loop
 - Batas yang diketahui: resolusi hanya berlaku untuk tool launchApp di
   PlanningAgent (bukan skill — skill memakai paket dari JSON skill-nya
   sendiri); app di luar 13 nama yang dikenal tetap mengandalkan tebakan model.
+
+## v7.6 — Home + bubble chat ala mockup Tuan (24 Nov 2026 ~18:25 WIB)
+
+Mockup acuan: `~/workspace/user/media_library/image/4a/4ae0a90806a057a7285ea8c395d2ebd670134f2b7d7de863942f3a401a220bd1.jpg`
+(5 layar: Home besar + 4 layar kecil). Gambar kedua (73db3e66...) hanya referensi
+tambahan. Perintah Tuan: build model begitu, bubble chat antara user dan agent harus
+jelas persis seperti gambar, dan panel bubble lebih transparan tapi garis bubble
+chatnya jelas.
+
+### Yang dibangun
+
+1. **Home ala mockup** (`ui/MainActivity.kt`):
+   - Header: logo MOBIUS asli (lingkaran 64 dp, gradient) + "MOBIUS" gradient +
+     tagline "Your Intelligence. Everywhere. Owned by You." (AppConfig.TAGLINE).
+   - Kartu sapaan: avatar loop 40 dp + "Halo! 👋" (bold) + "Ada yang bisa aku
+     bantu hari ini?" — kartu ber-border (outline) seperti mockup.
+   - 4 chip cepat 2x2 (ikon Material digambar via ImageVector.Builder, tanpa
+     dependensi baru): "Ringkas WA grup", "Analisis harga", "Buat laporan",
+     "Cari informasi".
+   - Input pill: OutlinedTextField rounded 28 dp + ikon sparkle di kiri +
+     tombol mic lingkaran gradient 48 dp (SpeechRecognizer, sama seperti bubble;
+     null = tidak terdengar/ditolak → hint "coba ketik saja"). Tombol Enter
+     (ImeAction.Send) menjalankan tugas. Placeholder diganti ke teks mockup:
+     "Ketik perintah atau ketuk mikrofon...".
+   - TIDAK dibangun (sengaja): hamburger (tidak ada drawer) dan avatar "A"
+     pojok kanan (tidak ada profil/akun). TIDAK ada badge "Pro". TIDAK meniru
+     typo mockup "Ringkasaan" — ejaan yang benar "Ringkasan".
+   - `submitTask(rawText, onDone)` diekstrak dari tombol Jalankan — satu jalur
+     submit untuk tombol Jalankan, Enter, mic, dan chip WA (file lampiran,
+     perekaman chat, TTS, dan gate tetap sama seperti sebelumnya).
+2. **Chip — semuanya berfungsi nyata, tidak ada sukses palsu:**
+   - "Ringkas WA grup": TIDAK ADA pembaca riwayat chat WA di app. Jalur nyata
+     terdekat = buka WhatsApp lewat planning loop (KnownApps → com.whatsapp),
+     lalu pesan panduan dicatat sebagai pesan agent: buka chat grupnya, ketuk
+     bubble, tulis "ringkas halaman ini" (SummarizePageAgent membaca layar).
+     Bila WhatsApp tidak terinstal, outcome launch berkata jujur dan pesan
+     panduan TIDAK dicatat.
+   - "Analisis harga": prefill input "Bandingkan harga [produk] di Shopee dan
+     Tokopedia" — user ganti [produk] lalu Jalankan. Jalur nyata: skill
+     shopee_price_search / tokopedia_price_search (TaskRouter). Jujur soal
+     batas: Tuan TIDAK punya aplikasi Shopee/Tokopedia di HP-nya, jadi
+     launchApp (getLaunchIntentForPackage == null → false) gagal di langkah 1
+     dan outcome-nya berkata jujur; kalau app-nya terinstal nanti, skill jalan.
+   - "Buat laporan": prefill "Buatkan laporan singkat tentang " — user lengkapi
+     topik, Jalankan → ChatAgent menulis draf laporan.
+   - "Cari informasi": prefill "Cari tahu tentang " — user lengkapi, Jalankan
+     → ChatAgent menjawab via AI.
+3. **Bubble chat — Home DAN panel bubble** (`ui/ChatHistoryView.kt`, satu view
+   dipakai keduanya, jadi satu perubahan berlaku di keduanya):
+   - User: rata kanan, bubble gradient logo (1A73E8 → 4D7CFE → 7C4DFF), teks
+     putih, stroke putih 0.35, sudut 16/16/4/16, lebar maks 280 dp.
+   - Agent: rata kiri, avatar loop 28 dp (gradient) + kartu surfaceVariant
+     dengan stroke glow #B388FF alpha 0.7 (tegas, tidak pudar), label "MOBIUS"
+     (tertiary), sudut 16/16/16/4.
+4. **Panel bubble lebih transparan** (`bubble/BubbleInput.kt`): Surface panel
+   `surface.copy(alpha = 0.75f)` (sebelumnya solid) + border outline 1 dp.
+   Yang transparan HANYA background panel — bubble chat di dalamnya tetap
+   fill solid + stroke penuh, kontras tidak turun.
+5. **String** (`ui/MobiusStrings.kt`): 11 field baru ID/EN (sapaan, 4 label chip,
+   3 prefill, chipWaOpen, chipWaNext). Default tetap Bahasa Indonesia; ganti
+   bahasa live tanpa restart (pola v7).
+
+### Build & verifikasi
+- Build: `GRADLE_USER_HOME=/home/hatch/.gradle`,
+  `JAVA_HOME=~/workspace/rea-env/providers/jdk-21.0.13.1+2`,
+  `JAVA_TOOL_OPTIONS=-Djava.net.preferIPv4Stack=true`, `ANDROID_HOME=~/android-sdk`,
+  `gradle-8.9/bin/gradle assembleDebug` dari `~/workspace/mobius-android/mobius/`.
+- `assembleDebug` BERHASIL, EXIT 0, 1 mnt 45 dtk (6 executed, 34 up-to-date).
+  Peringatan yang muncul sudah ada sebelumnya (bukan dari v7.6): `!!` di
+  ReplyWhatsAppAgent, SOFT_INPUT_ADJUST_RESIZE + LocalLifecycleOwner deprecated.
+- Path ikon baru (chat, tag, dokumen, search, sparkle, mic 2-path) dicek sintaks
+  SVG-nya dengan Python sebelum build — 7/7 OK.
+- **APK:** `~/workspace/your_files/mobius-debug-v7.6.apk`, **61.697.499 byte**,
+  SHA-256 `43d12dbef3c01f9b15aa33f8957ef1fa1e3d6334d063ae5e1b2c305776b0aa8d`.
+  (Isi TERBUKTI beda dari v7.5: SHA beda, dan strings di classes7.dex mengandung
+  "Halo!", "Ringkas WA grup", "Analisis harga", "Buat laporan", "Cari informasi",
+  "Ketik perintah atau ketuk mikrofon", "buka aplikasi WhatsApp",
+  "Bandingkan harga"; "MobiusChatIcon" 4x, "chipWaNext" 2x.)
+- aapt2: `com.mobius`, versionName `0.1.0`; 12 izin, daftarnya IDENTIK dengan
+  v7.5 (diff kosong) — tidak ada izin baru.
+- Tanda tangan: keystore permanen `~/workspace/mobius-android/mobius-release.keystore`
+  (alias mobius); apksigner verify: sertifikat SHA-256
+  `fc30510abaa8848d5ce040b2a04049e95c5648630b6e755f1ab7de4908140e6e` — cocok.
+  **Instal sebagai UPDATE di atas v7.5 (jangan uninstall).**
+- Catatan: apksigner sempat gagal 2x (`java: not found`) karena `export
+  JAVA_HOME=... PATH=$JAVA_HOME/bin:$PATH` dalam satu perintah memakai nilai
+  JAVA_HOME lama (kosong). Perbaikan: export JAVA_HOME dan PATH di dua perintah
+  terpisah. Dicatat di sini supaya tidak terulang.
+- Tidak ada push GitHub.
+
+### Yang belum diuji di perangkat
+- Tampilan TIDAK bisa diverifikasi di VM (tidak ada HP/emulator). Tuan harus cek
+  di HP-nya: (a) Home tampil seperti mockup (logo, sapaan, 4 chip, pill input +
+  mic); (b) bubble user vs agent langsung bisa dibedakan (kanan gradient vs kiri
+  avatar + kartu gelap); (c) panel bubble: background lebih transparan (app di
+  belakang samar terlihat) tapi garis bubble chat tetap tegas; (d) tiap chip:
+  "Ringkas WA grup" membuka WhatsApp + pesan panduan muncul; "Analisis harga"
+  prefill lalu Jalankan memberi outcome jujur soal app Shopee/Tokopedia yang
+  tidak ada; "Buat laporan"/"Cari informasi" prefill lalu Jalankan dijawab AI.
+- Batas yang diketahui: ikon chip digambar dari path data Material (bukan aset
+  gambar) — bila satu path ternyata tidak ter-render, Home akan crash saat
+  dibuka (path sudah dicek sintaksnya, tapi render di perangkat belum terbukti);
+  chip "Analisis harga" tidak bisa memberi harga tanpa aplikasi Shopee/Tokopedia
+  terinstal; "Ringkas WA grup" butuh user membuka grupnya sendiri dulu.
+
+---
+
+## v7.7 — 5 bug laporan Tuan 24 Nov 21:20 WIB (koordinator build + 3 penyelidik)
+
+**Perintah:** investigasi penyebab tiap bug di kode, perbaiki, build, sign, verifikasi. Jangan push GitHub. Jangan bake API key.
+
+### Bug 1 — Auto-scroll deterministik tidak jalan (3 bug terpisah + 1 akibat Bug 3)
+
+**Penyebab utama (akibat Bug 3):** `AutoScrollWorker.start()` gagal di `buildTool()` karena `MobiusAccessibilityService.instance == null` (service tidak terikat). Pesan yang muncul benar secara mekanisme, salah secara diagnosis.
+**3 bug terpisah di worker (independen dari service mati):**
+1. Tool ditangkap SEKALI saat start (`AutoScrollWorker.kt` lama, baris 66) dan dipakai selamanya — kalau service mati di tengah jalan, worker tetap memegang instance mati; kalau service hidup lagi, worker tidak pulih.
+2. Tidak ada retry saat start — langsung gagal pada percobaan pertama (jendela rebind setelah update).
+3. Pesan "aksesibilitas belum aktif" dipakai untuk toggle mati DAN toggle ON-tapi-service-belum-jalan.
+**Perbaikan (`bubble/AutoScrollWorker.kt`):** loop diekstrak ke `runLoop()` yang membangun ulang tool TIAP putaran (service mati → berhenti dengan alasan benar; service hidup lagi → pulih); `start()` menunggu sampai 2 detik (`REBIND_WAIT_MS`, cek tiap 250 ms) bila service belum terikat; semua pesan memakai `accessibilityUnavailableText()` yang membedakan OFF vs ENABLED_NOT_RUNNING. Fling 120 ms, stop setelah 3 gagal, interval 30 dtk TIDAK diubah. Catatan jujur: `dispatchGesture` dipanggil tanpa callback, jadi worker tetap tidak bisa tahu apakah layar benar-benar bergeser (bukan bug yang dilaporkan).
+
+### Bug 2 — OpenRouter API key hilang setelah Save
+
+**Penyebab (TERBUKTI dari kode, `ui/OpenRouterSettings.kt:39-54`):** pola draft + `LaunchedEffect(savedKey, savedModel)` + latch `draftsLoaded` mengalami race dengan emisi pertama DataStore — efek pengisi draft jalan saat nilai yang dibaca masih placeholder awal (`""` dari `collectAsState(initial = "")`), lalu latch mengunci nilai kosong itu dan menolak nilai asli yang datang belakangan. Field tampil kosong padahal key masih tersimpan. **Lalu key benar-benar hilang:** Save berikutnya dengan draft kosong menimpa key asli dengan `""` (baris 96, tanpa guard) → `AIRouter` menganggap tidak ada key → fallback tidak pernah dipanggil. Router-nya sendiri SUDAH BENAR (baca key segar per-call, `OpenRouterAI` stateless, tidak ada cache — key baru langsung dipakai tanpa restart).
+**Perbaikan (`ui/OpenRouterSettings.kt`, `core/PermissionManager.kt`):** draft dimuat sekali via `LaunchedEffect(Unit)` + `pm.getOpenRouterApiKey()/getOpenRouterModel()` (`first()` menunggu nilai asli dari disk, bukan placeholder) + `rememberSaveable`; Save TIDAK PERNAH menulis key kosong (draft kosong = biarkan key lama; bila belum ada key sama sekali → pesan "Tempel kunci dulu sebelum menyimpan", bukan "Kunci tersimpan"); tulis key+model atomik dalam satu edit (`setOpenRouterSettings`); peringatan bila cloud gate OFF ("fallback ini hanya jalan kalau AI cloud diizinkan") — karena gate OFF mematikan OpenRouter sepenuhnya dan tampak seperti "key hilang". Key tetap tidak pernah di-log / masuk APK / repo.
+
+### Bug 3 — Capabilities "on" tapi agent bilang "off"
+
+**Penyebab (TERBUKTI):** dua sumber kebenaran berbeda — UI membaca toggle persisten (`Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES`), agent membaca live binding (`MobiusAccessibilityService.instance`). Toggle bisa ON sementara service tidak terikat (umum di MIUI setelah update APK / dibunuh battery killer). App tidak pernah membedakan keduanya.
+**Perbaikan:** `core/PermissionManager.kt` — enum `AccessibilityState` (OFF / ENABLED_NOT_RUNNING / LIVE) + `accessibilityState()` + field `accessibilityLive` di `PermissionStatus` (satu sumber kebenaran). `ui/MainActivity.kt` — baris Capabilities aksesibilitas jadi 3-state (nonaktif merah / aktif hijau / "butuh perbaikan" kuning `MobiusWarning` + teks panduan + tombol "Buka Pengaturan" ke `accessibilitySettingsIntent()`). `core/Orchestrator.kt` — helper `accessibilityUnavailableMessage()` (ID/EN sesuai bahasa app) dipakai di `runSkill()` dan diteruskan ke `PlanningAgent` sebagai `toolUnavailableMessage` (fallback pesan Inggris lama bila null). `ui/MobiusStrings.kt` — 4 string baru ID+EN (`capNeedsFix`, `capA11yNotRunning`, `a11yOffMsg`, `a11yNotRunningMsg`).
+**Yang TIDAK bisa diperbaiki dari kode (terus terang):** app tidak bisa memaksa sistem me-bind AccessibilityService — tidak ada API publik untuk itu. Satu-satunya pemicu rebind: toggle off→on manual, restart HP, atau sistem sendiri. Panduan untuk Tuan (MIUI): aktifkan Autostart untuk MOBIUS, matikan battery optimization untuk MOBIUS, kunci app di Recent Apps.
+
+### Bug 4a — Agent tidak bisa menemukan aplikasi (Alarm dkk)
+
+**Penyebab:** `KnownApps` hanya 13 app; nama yang tidak ada di map dibiarkan ditebak mentah oleh model (`"alarm"` → `getLaunchIntentForPackage("alarm")` → null → gagal).
+**Perbaikan (`core/KnownApps.kt`):** +10 app sistem, varian MIUI/HyperOS di HP Tuan sebagai entri utama, varian Google di bawah key `"google ..."` (map satu nama = satu package): alarm/jam/clock → `com.android.deskclock`; kalender/calendar → `com.xiaomi.calendar`; kamera/camera → `com.android.camera`; galeri/gallery → `com.miui.gallery`; foto → `com.google.android.apps.photos`; pengaturan/setelan/settings → `com.android.settings`; file/files → `com.mi.android.globalFileexplorer`; google files → `com.google.android.apps.nbu.files`; kalkulator/calculator → `com.miui.calculator`; kontak/contacts → `com.android.contacts`; pesan/sms → `com.android.mms`; messages → `com.google.android.apps.messaging`; telepon/phone → `com.android.contacts` (dialer MIUI hidup di wadah Contacts; ROM dengan Google Phone pakai `com.google.android.dialer` — Tuan verifikasi di HP bila launch telepon gagal; JANGAN `com.android.phone`, itu service tanpa launcher activity). Alias + display name ikut ditambah. **Belum terverifikasi di device:** package MIUI di atas diambil dari daftar `pm list packages` perangkat Xiaomi di sumber investigasi, bukan dari HP Tuan — bila satu launch gagal, pesan agent kini menyebut package yang dicoba (v7.5) sehingga mudah dilacak.
+
+### Bug 4b — Keyboard (Gboard) memblokir pembacaan layar
+
+**Penyebab (TERBUKTI):** tidak ada satu pun penanganan keyboard di kode agent — saat Gboard tampil, active window adalah window IME, jadi `currentPackage()` mengembalikan `com.google.android.inputmethod.latin` dan `readScreen` terhadap package itu mengembalikan daftar kosong.
+**Perbaikan:** `accessibility/ScreenReader.kt` — `isKeyboardVisible()` baru: cek utama tipe window `TYPE_INPUT_METHOD` (berlaku untuk keyboard apa pun, bukan tebak package) + fallback package IME yang dikenal (Gboard, Sogou Xiaomi, Xiaomi keyboard). `agent/PlanningAgent.kt` — `observe()` menutup keyboard (`tool.back()` 1× + `delay(300)`) SEBELUM membaca layar, HANYA bila IME terdeteksi (guard wajib: `back()` membabi buta bisa keluar dari app yang sedang dikerjakan / membatalkan edit). `observe()` dipanggil sebelum langkah 1 DAN sesudah tiap langkah, jadi keyboard yang muncul di tengah loop (sesudah `type()`) juga tertangani. `ai/PromptBuilder.kt` — satu kalimat cadangan di `planningStepPrompt` ("If the screen shows only a keyboard, use back() once..."). Primitif `back()` sudah ada (`GLOBAL_ACTION_BACK`) — tidak ada primitif baru. `SummarizePageAgent` TIDAK diubah (bug 5 = verifikasi saja), tapi ia tetap rentan keyboard yang sama — perbaikan lanjutan bila Tuan minta.
+
+### Bug 5 — Verifikasi (tidak diubah): summary + balas WA terakhir
+
+**UTUH.** `grep "v7.6"` hanya mengenai 4 file UI (`BubbleInput.kt`, `MainActivity.kt`, `ChatHistoryView.kt`, `MobiusStrings.kt`). `SummarizePageAgent` (`AgentFactory.kt:39-98`, routing `TaskRouter.kt:104-111` + heuristik ringkas-sebelum-WA) dan kedua jalur balas WA — `ReplyWhatsAppAgent` satu-shot (`AgentFactory.kt:104-186`, confirm-before-send default ON) dan `WatcherEngine` standing rules (`WatcherEngine.kt:68-141`, RemoteInput, `autoSend` default false = tahan-minta-persetujuan) — lengkap dan tidak tersentuh v7.6. **3 celah jujur (bawaan desain, bukan kerusakan v7.6):** (1) kedua jalur bergantung pada `MobiusAccessibilityService.instance` yang sama — bila service mati (bug 3), keduanya gagal bersamaan; (2) `SummarizePageAgent` juga rentan keyboard (bug 4b) karena membaca layar tanpa guard IME; (3) "balas WA terakhir" butuh notifikasi masih di cache (TTL 10 menit) + Notification access aktif + rule yang cocok + flag `WA_WATCHER` ON; draf watcher yang ditahan hanya di memori (restart proses menghilangkannya).
+
+### Build & verifikasi v7.7
+
+- `assembleDebug` BERHASIL 1m 22s, EXIT 0 (biner Gradle cache, env standar). Satu kegagalan menengah diperbaiki: `isActive` tidak resolve di `runLoop` (fungsi suspend biasa, bukan lambda `launch`) → `currentCoroutineContext().isActive`. Warning hanya warning lama (AgentFactory `!!`, `SOFT_INPUT_ADJUST_RESIZE`, `LocalLifecycleOwner`) — tidak ada warning dari file v7.7.
+- **APK:** `~/workspace/your_files/mobius-debug-v7.7.apk`, **61.517.275 byte**, SHA-256 `d7c794c0036a2a4ebf1ff496eb76cecf42099f3dd8d268fd205e88cc8b1bde11`.
+- aapt2: package `com.mobius`, versionName `0.1.0`; **12 izin, daftar IDENTIK dengan v7.6** (diff kosong) — tidak ada izin baru.
+- Tanda tangan: keystore permanen; apksigner verify: sertifikat SHA-256 `fc30510abaa8848d5ce040b2a04049e95c5648630b6e755f1ab7de4908140e6e` — cocok. **Instal sebagai UPDATE di atas v7.6 (jangan uninstall).**
+- Isi TERBUKTI beda dari v7.6 (SHA beda; strings di dex: "butuh perbaikan", "Menunggu layanan aksesibilitas", "layanan aksesibilitas belum jalan", "Tempel kunci dulu", "com.android.deskclock", "com.xiaomi.calendar", "com.miui.gallery", "com.mi.android.globalFileexplorer", "isKeyboardVisible", "TYPE_INPUT_METHOD", "setOpenRouterSettings", "accessibilityState").
+- Tidak ada push GitHub. Tidak ada API key di APK/repo (grep `sk-or-` kosong; key hanya di DataStore HP).
+
+### Yang belum diuji di perangkat (jujur — VM tidak punya HP)
+
+- Semua 5 perbaikan hanya terbukti compile + isi dex; perilaku di HP Tuan belum dites: (1) auto-scroll pulih/berhenti jujur saat service mati-hidup; (2) key OpenRouter bertahan setelah pindah tab + restart app, dan Save kosong tidak menghapus key; (3) Capabilities menampilkan "butuh perbaikan" + tombol Settings saat toggle ON tapi service mati; pesan agent membedakan kedua keadaan; (4) "buka alarm, atur jam 6" — launch `com.android.deskclock` + keyboard menutup sendiri sebelum baca layar; package MIUI lain (kalender, telepon, file) — verifikasi satu per satu di HP; (5) summary + balas WA tetap jalan seperti sebelumnya.
+- Tes yang disarankan Tuan: simpan key → pindah tab → kembali ke Settings (field harus tetap terisi + label "Kunci tersimpan"); kill app → buka lagi → cek lagi; matikan-nyalakan aksesibilitas → cek indikator Capabilities berubah; perintah "buka alarm, atur jam 6 besok" dari bubble dengan keyboard terbuka.
