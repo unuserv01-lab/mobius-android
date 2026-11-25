@@ -2741,3 +2741,26 @@ chatnya jelas.
 
 - Semua 5 perbaikan hanya terbukti compile + isi dex; perilaku di HP Tuan belum dites: (1) auto-scroll pulih/berhenti jujur saat service mati-hidup; (2) key OpenRouter bertahan setelah pindah tab + restart app, dan Save kosong tidak menghapus key; (3) Capabilities menampilkan "butuh perbaikan" + tombol Settings saat toggle ON tapi service mati; pesan agent membedakan kedua keadaan; (4) "buka alarm, atur jam 6" — launch `com.android.deskclock` + keyboard menutup sendiri sebelum baca layar; package MIUI lain (kalender, telepon, file) — verifikasi satu per satu di HP; (5) summary + balas WA tetap jalan seperti sebelumnya.
 - Tes yang disarankan Tuan: simpan key → pindah tab → kembali ke Settings (field harus tetap terisi + label "Kunci tersimpan"); kill app → buka lagi → cek lagi; matikan-nyalakan aksesibilitas → cek indikator Capabilities berubah; perintah "buka alarm, atur jam 6 besok" dari bubble dengan keyboard terbuka.
+
+## v7.8 — P0 audit ChatGPT: canPerformGestures + verifikasi launchApp (25 Nov 2026 ~12:25 WIB)
+
+Sumber: audit ChatGPT 25 Nov 12:20 (6 bug, semua diverifikasi Muse ke source). Tuan pilih opsi 1: perbaiki P0 dulu, patch plan v8 belakangan.
+
+### Bug 1 — Gesture capability tidak dideklarasikan (TERBUKTI, perbaikan 1 baris)
+**Penyebab:** `res/xml/accessibility_service_config.xml` tidak mencantumkan `android:canPerformGestures="true"`, padahal `ActionExecutor.swipe()` memakai `dispatchGesture`. Android menolak gesture tanpa capability itu — jadi kemungkinan besar **auto-scroll/swipe TIDAK PERNAH jalan di HP Tuan**, bukan karena bug logika v7.3/v7.7. Semua perbaikan auto-scroll sebelumnya dibangun di atas jalur yang memang ditolak sistem.
+**Perbaikan:** tambah `android:canPerformGestures="true"` ke config XML. **Terverifikasi di APK:** `aapt2 dump xmltree ... --file res/xml/accessibility_service_config.xml` menampilkan `canPerformGestures=true`.
+
+### Bug 2 (P0) — launchApp verifikasi, bukan sekadar "tidak crash"
+**Penyebab:** `ActionExecutor.launchApp()` dulu `startActivity(intent); true` — true hanya berarti pemanggilan tidak throw.
+**Perbaikan (`accessibility/ActionExecutor.kt`):** `launchApp` kini `suspend fun`; sesudah startActivity, poll maks 3 detik via `waitFor(3_000)` sampai `reader.currentPackage() == packageName` (memakai `ScreenReader.currentPackage()` yang sudah ada). True = package target TERAMATI sebagai foreground window; false = tidak pernah muncul (app hilang/dinonaktifkan, start diblokir, service mati). Fail closed: service mati → currentPackage() null → false, bukan klaim sukses. KDoc diperbarui menjelaskan semantik Accepted vs Verified. **Perubahan pendukung (`core/Tool.kt`):** `resultOf` kini menerima `block: suspend () -> Boolean` (source-compatible: lambda biasa tetap valid sebagai lambda suspend). Call site `AgentFactory.kt:145` sudah di dalam `suspend fun execute`, tidak berubah.
+**Yang TIDAK masuk P0 (celah jujur):** `swipe()` masih melaporkan Accepted (boolean dispatchGesture), bukan Verified — verifikasi swipe butuh perbandingan layar sebelum/sesudah, di luar scope P0. `firePendingIntent()` pola yang sama, tapi pemakainya sudah memverifikasi sesudahnya (`waitFor(findChatInput)`), jadi tertutup downstream.
+
+### Build & verifikasi v7.8
+- `assembleDebug` BERHASIL 2m 22s, EXIT 0 (biner Gradle cache, env standar). Warning hanya warning lama (AgentFactory `!!`) — tidak ada warning dari file v7.8.
+- **APK:** `~/workspace/your_files/mobius-debug-v7.8.apk`, **61.517.275 byte** (KEBETULAN sama persis dengan v7.7 — isi TERBUKTI beda: SHA dex classes3/8/10 berbeda dari v7.7), SHA-256 `44a53bf25f24da0c0d6975b5a1f23f8ecf3c0ad5ad60df28dfaa40d93b1b6425`.
+- aapt2: package `com.mobius`, versionName `0.1.0`; **12 izin, daftar IDENTIK dengan v7.7** — tidak ada izin baru.
+- Tanda tangan: keystore permanen; apksigner verify: sertifikat SHA-256 `fc30510abaa8848d5ce040b2a04049e95c5648630b6e755f1ab7de4908140e6e` — cocok. **Instal sebagai UPDATE di atas v7.7 (jangan uninstall).**
+- Tidak ada push GitHub. Tidak ada API key di APK.
+
+### Yang belum diuji di perangkat (jujur — VM tidak punya HP)
+- (1) **Auto-scroll sekarang benar-benar scroll atau tidak** (TikTok/Shorts/feed) — ini tes utama Bug 1; bila masih tidak jalan, penyebabnya bukan lagi capability. (2) "buka alarm" — bila app gagal dibuka, agent sekarang HARUS bilang gagal, bukan klaim sukses; bila berhasil, tidak ada perubahan perilaku yang terlihat. (3) Balas WA terakhir tetap jalan (launchApp kini suspend — cek regresi). (4) Capabilities + key OpenRouter tetap seperti v7.7.
