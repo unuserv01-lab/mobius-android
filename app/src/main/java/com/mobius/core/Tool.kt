@@ -288,7 +288,7 @@ class AccessibilityTools(
         ToolResult(false, e.message ?: e.javaClass.simpleName)
     }
 
-    private suspend fun resultOf(okMessage: String, failMessage: String, block: () -> Boolean): ToolResult = try {
+    private suspend fun resultOf(okMessage: String, failMessage: String, block: suspend () -> Boolean): ToolResult = try {
         if (block()) ToolResult(true, okMessage) else ToolResult(false, failMessage)
     } catch (e: Exception) {
         ToolResult(false, e.message ?: e.javaClass.simpleName)

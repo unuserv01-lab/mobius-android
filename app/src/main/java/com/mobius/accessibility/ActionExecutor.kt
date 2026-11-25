@@ -118,16 +118,27 @@ class ActionExecutor(
 
     fun home(): Boolean = service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME)
 
-    /** Opens an app through its launcher intent. */
-    fun launchApp(packageName: String): Boolean {
+    /**
+     * Opens an app through its launcher intent — and VERIFIES it actually opened.
+     *
+     * v7.8 (audit ChatGPT, Bug 2 P0): the old code returned true as soon as
+     * startActivity() did not throw, which only proves the call was accepted, not that
+     * the app is on screen. Now true means the target package was observed as the
+     * foreground window (via [ScreenReader.currentPackage]) within 3 seconds; false
+     * means it never appeared (app missing/disabled, start blocked, service dead).
+     * Fails closed: when the service is not running, currentPackage() is null and we
+     * return false instead of claiming success.
+     */
+    suspend fun launchApp(packageName: String): Boolean {
         val intent = context.packageManager.getLaunchIntentForPackage(packageName)
             ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) ?: return false
-        return try {
+        try {
             context.startActivity(intent)
-            true
         } catch (e: Exception) {
-            false
+            return false
         }
+        // Verified, not just accepted: poll until the target owns the active window.
+        return waitFor(3_000) { reader.currentPackage().takeIf { it == packageName } } != null
     }
 
     /**
