@@ -2,6 +2,7 @@ package com.mobius.accessibility
 
 import android.accessibilityservice.AccessibilityService
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 
 /**
  * Reads other apps' screens through the AccessibilityService. All lookups are scoped to one package
@@ -24,6 +25,24 @@ class ScreenReader(private val service: AccessibilityService) {
 
     /** Which package owns the active window right now. */
     fun currentPackage(): String? = service.rootInActiveWindow?.packageName?.toString()
+
+    /**
+     * v7.7 bug 4b — true when a software keyboard (IME) window is showing.
+     * Primary check is the window TYPE ([AccessibilityWindowInfo.TYPE_INPUT_METHOD]),
+     * not a package name, so it works for any keyboard. The package-name
+     * fallback covers the case where the window list itself is unavailable:
+     * when the keyboard is up, the active window belongs to the IME.
+     */
+    fun isKeyboardVisible(): Boolean {
+        try {
+            if (service.windows.any { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }) {
+                return true
+            }
+        } catch (e: Exception) {
+            // windows can throw while the screen is changing; fall through
+        }
+        return currentPackage() in IME_PACKAGES
+    }
 
     /** Plain-text dump of visible texts (debugging aid / possible prompt context). */
     fun readScreen(pkg: String, limit: Int = 200): List<String> {
@@ -102,5 +121,16 @@ class ScreenReader(private val service: AccessibilityService) {
 
     private companion object {
         val SEND_LABELS = setOf("send", "kirim", "enviar", "envoyer", "senden", "invia")
+
+        /**
+         * Known keyboard packages (fallback for [isKeyboardVisible] only).
+         * Gboard is what Tuan uses; the Xiaomi entries are best-effort —
+         * the TYPE_INPUT_METHOD check above is what normally catches them.
+         */
+        val IME_PACKAGES = setOf(
+            "com.google.android.inputmethod.latin", // Gboard
+            "com.sohu.inputmethod.sogou.xiaomi", // Sogou input (some Xiaomi ROMs)
+            "com.xiaomi.inputmethod", // Xiaomi keyboard (some ROMs)
+        )
     }
 }

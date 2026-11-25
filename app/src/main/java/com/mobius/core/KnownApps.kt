@@ -26,6 +26,41 @@ object KnownApps {
         "grab" to "com.grabtaxi.passenger",
         "dana" to "id.dana",
         "ovo" to "ovo.id",
+        // --- v7.7 bug 4a: system apps. One name = one package, so the
+        // variant picked is the MIUI/HyperOS one on Tuan's phone; the
+        // Google variant lives under a separate "google ..." key.
+        "alarm" to "com.android.deskclock",
+        "jam" to "com.android.deskclock",
+        "clock" to "com.android.deskclock",
+        "google clock" to "com.google.android.deskclock",
+        "kalender" to "com.xiaomi.calendar",
+        "calendar" to "com.xiaomi.calendar",
+        "google calendar" to "com.google.android.calendar",
+        "kamera" to "com.android.camera",
+        "camera" to "com.android.camera",
+        "galeri" to "com.miui.gallery",
+        "gallery" to "com.miui.gallery",
+        "foto" to "com.google.android.apps.photos",
+        "pengaturan" to "com.android.settings",
+        "setelan" to "com.android.settings",
+        "settings" to "com.android.settings",
+        "file" to "com.mi.android.globalFileexplorer",
+        "files" to "com.mi.android.globalFileexplorer",
+        "google files" to "com.google.android.apps.nbu.files",
+        "kalkulator" to "com.miui.calculator",
+        "calculator" to "com.miui.calculator",
+        "kontak" to "com.android.contacts",
+        "contacts" to "com.android.contacts",
+        "pesan" to "com.android.mms",
+        "sms" to "com.android.mms",
+        "messages" to "com.google.android.apps.messaging",
+        // "telepon": on MIUI the dialer lives inside the Contacts container
+        // (com.android.contacts). ROMs with Google Phone use
+        // com.google.android.dialer instead — verify on the device if the
+        // launch ever fails. NEVER com.android.phone: that is the telephony
+        // service, it has no launcher activity and always fails to open.
+        "telepon" to "com.android.contacts",
+        "phone" to "com.android.contacts",
     )
 
     /** Short aliases people actually type (arguments only, never text scanning). */
@@ -50,6 +85,33 @@ object KnownApps {
         "grab" to "Grab",
         "dana" to "DANA",
         "ovo" to "OVO",
+        "alarm" to "Alarm",
+        "jam" to "Jam",
+        "clock" to "Clock",
+        "google clock" to "Google Clock",
+        "kalender" to "Kalender",
+        "calendar" to "Calendar",
+        "google calendar" to "Google Calendar",
+        "kamera" to "Kamera",
+        "camera" to "Camera",
+        "galeri" to "Galeri",
+        "gallery" to "Gallery",
+        "foto" to "Foto",
+        "pengaturan" to "Pengaturan",
+        "setelan" to "Setelan",
+        "settings" to "Settings",
+        "file" to "File",
+        "files" to "Files",
+        "google files" to "Google Files",
+        "kalkulator" to "Kalkulator",
+        "calculator" to "Calculator",
+        "kontak" to "Kontak",
+        "contacts" to "Contacts",
+        "pesan" to "Pesan",
+        "sms" to "SMS",
+        "messages" to "Messages",
+        "telepon" to "Telepon",
+        "phone" to "Phone",
     )
 
     /** Display name for a package ("YouTube"), or null when the package is unknown. */

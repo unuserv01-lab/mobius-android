@@ -150,6 +150,7 @@ object PromptBuilder {
         | code(task) — only when a step needs code written/run, never for screen actions.
         For launchApp, an app NAME (YouTube, WhatsApp, ...) is fine — it is resolved to the real
         package for you; never invent a package id.
+        If the screen shows only a keyboard, use back() once to dismiss it, then readScreen again.
     """.trimIndent()
 
     /**

@@ -30,11 +30,31 @@ private val Context.mobiusDataStore: DataStore<Preferences> by preferencesDataSt
 data class PermissionStatus(
     val overlay: Boolean,
     val accessibility: Boolean,
+    /**
+     * v7.7 bug 3 — LIVE accessibility service (bound right now), not just the
+     * toggle. The toggle can be ON while the service is dead (after an APK
+     * update, or killed by MIUI), so [accessibility] alone must never be
+     * shown as "the service works".
+     */
+    val accessibilityLive: Boolean,
     val notificationListener: Boolean,
     val usageStats: Boolean,
     val postNotifications: Boolean,
     val microphone: Boolean,
 )
+
+/**
+ * v7.7 bug 3 — the REAL accessibility state. The toggle and the live service
+ * are two different things; the UI and the agents must both use this.
+ */
+enum class AccessibilityState {
+    /** Toggle OFF in Settings. */
+    OFF,
+    /** Toggle ON, but the service is not bound/running right now. */
+    ENABLED_NOT_RUNNING,
+    /** Toggle ON and the service is bound — cross-app actions can really run. */
+    LIVE,
+}
 
 /**
  * Permission gate + user preferences (DataStore).
@@ -82,10 +102,17 @@ class PermissionManager(context: Context) {
     suspend fun setOpenRouterApiKey(value: String) = store.edit { it[Keys.OPENROUTER_KEY] = value }
     suspend fun setOpenRouterModel(value: String) = store.edit { it[Keys.OPENROUTER_MODEL] = value }
 
+    /** v7.7 bug 2 — one atomic edit for key + model (two separate edits could leave only one saved). */
+    suspend fun setOpenRouterSettings(key: String, model: String) = store.edit {
+        it[Keys.OPENROUTER_KEY] = key
+        it[Keys.OPENROUTER_MODEL] = model
+    }
+
     // ----- Android permission state -----
     fun status(): PermissionStatus = PermissionStatus(
         overlay = Settings.canDrawOverlays(appContext),
         accessibility = isAccessibilityEnabled(),
+        accessibilityLive = MobiusAccessibilityService.instance != null,
         notificationListener = NotificationManagerCompat.getEnabledListenerPackages(appContext)
             .contains(appContext.packageName),
         usageStats = isUsageAccessGranted(),
@@ -95,6 +122,17 @@ class PermissionManager(context: Context) {
         microphone = ContextCompat.checkSelfPermission(appContext, Manifest.permission.RECORD_AUDIO) ==
             PackageManager.PERMISSION_GRANTED,
     )
+
+    /**
+     * v7.7 bug 3 — the single source of truth for "is accessibility usable".
+     * Toggle (Settings.Secure) AND live binding (service instance) must agree;
+     * anything else is a mismatch the UI and the agents must report honestly.
+     */
+    fun accessibilityState(): AccessibilityState {
+        if (!isAccessibilityEnabled()) return AccessibilityState.OFF
+        return if (MobiusAccessibilityService.instance != null) AccessibilityState.LIVE
+        else AccessibilityState.ENABLED_NOT_RUNNING
+    }
 
     private fun isAccessibilityEnabled(): Boolean {
         val enabled = Settings.Secure.getString(

@@ -61,6 +61,12 @@ class PlanningAgent(
     private val codeExecutor: (suspend (String) -> AgentResult)? = null,
     private val maxSteps: Int = DEFAULT_MAX_STEPS,
     private val timeoutMs: Long = DEFAULT_TIMEOUT_MS,
+    /**
+     * v7.7 bug 3 — why there is no tool (toggle off vs toggle on but the
+     * service not running), supplied by the Orchestrator. Null = fall back
+     * to the old generic message.
+     */
+    private val toolUnavailableMessage: String? = null,
 ) : SubAgent(taskId, tools) {
     override val name = "PlanningLoop"
 
@@ -72,8 +78,9 @@ class PlanningAgent(
         val tool = this.tool
             ?: return AgentResult(
                 false,
-                "Accessibility access is off, so I can't operate other apps. Enable it in " +
-                    "Settings > Accessibility > ${AppConfig.APP_NAME}.",
+                toolUnavailableMessage
+                    ?: "Accessibility access is off, so I can't operate other apps. Enable it in " +
+                        "Settings > Accessibility > ${AppConfig.APP_NAME}.",
             )
         val deadline = SystemClock.elapsedRealtime() + timeoutMs
         val history = mutableListOf<String>()
@@ -236,6 +243,17 @@ class PlanningAgent(
 
     /** Reads the current screen through the Layer-1 tool (never the raw reader). */
     private suspend fun observe(tool: Tool, ctx: TaskContext): String {
+        // v7.7 bug 4b — a showing keyboard owns the active window, so a plain
+        // readScreen would read Gboard ("com.google.android.inputmethod.latin")
+        // instead of the app. Dismiss it first — but ONLY when an IME is
+        // actually detected: a blind back() could exit the app the agent is
+        // working in, or cancel an edit in progress. One press per observe;
+        // if the keyboard is still there afterwards, the read fails honestly
+        // and the model sees "screen unreadable" instead of a keyboard dump.
+        if (tools.reader?.isKeyboardVisible() == true) {
+            screenLock.withLock { tool.back() }
+            delay(300) // let the keyboard close before reading again
+        }
         val pkg = currentPackage(ctx) ?: return "No app in foreground (screen unreadable)."
         return try {
             screenLock.withLock {

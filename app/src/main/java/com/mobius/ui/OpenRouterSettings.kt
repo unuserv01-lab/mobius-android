@@ -14,6 +14,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
@@ -38,19 +39,24 @@ fun OpenRouterSection(app: MobiusApp) {
 
     val savedKey by pm.openRouterApiKey.collectAsState(initial = "")
     val savedModel by pm.openRouterModel.collectAsState(initial = AppConfig.DEFAULT_OPENROUTER_MODEL)
+    // v7.7 bug 2 — null = "not loaded yet". The cloud gate decides whether
+    // the fallback can run at all; read it the same safe way.
+    val cloudAllowed by pm.cloudAiAllowed.collectAsState(initial = null)
 
-    var keyDraft by remember { mutableStateOf("") }
-    var modelDraft by remember { mutableStateOf("") }
-    var draftsLoaded by remember { mutableStateOf(false) }
+    // v7.7 bug 2 — the old code filled the drafts from collectAsState's
+    // INITIAL placeholder ("") and then latched draftsLoaded=true, so the
+    // real value arriving from disk a moment later was refused and the
+    // field looked empty. A later Save then overwrote the real key with "".
+    // Load once from the REAL disk value instead (first() suspends until
+    // DataStore has actually read the file), and keep the drafts across
+    // rotation with rememberSaveable.
+    var keyDraft by rememberSaveable { mutableStateOf<String?>(null) }
+    var modelDraft by rememberSaveable { mutableStateOf<String?>(null) }
     var savedStatus by remember { mutableStateOf<String?>(null) }
 
-    // Fill the drafts once from the stored values (do not overwrite while typing).
-    LaunchedEffect(savedKey, savedModel) {
-        if (!draftsLoaded) {
-            keyDraft = savedKey
-            modelDraft = savedModel
-            draftsLoaded = true
-        }
+    LaunchedEffect(Unit) {
+        keyDraft = pm.getOpenRouterApiKey()
+        modelDraft = pm.getOpenRouterModel()
     }
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -71,7 +77,7 @@ fun OpenRouterSection(app: MobiusApp) {
         )
 
         OutlinedTextField(
-            value = keyDraft,
+            value = keyDraft ?: "",
             onValueChange = { keyDraft = it },
             label = { Text(strings.setOrKeyLabel) },
             placeholder = { Text(strings.setOrKeyHint) },
@@ -82,7 +88,7 @@ fun OpenRouterSection(app: MobiusApp) {
         )
 
         OutlinedTextField(
-            value = modelDraft,
+            value = modelDraft ?: "",
             onValueChange = { modelDraft = it },
             label = { Text(strings.setOrModelLabel) },
             placeholder = { Text(AppConfig.DEFAULT_OPENROUTER_MODEL) },
@@ -90,12 +96,30 @@ fun OpenRouterSection(app: MobiusApp) {
             modifier = Modifier.fillMaxWidth(),
         )
 
+        // v7.7 bug 2 — the fallback never runs while the cloud gate is OFF,
+        // which looks exactly like "the key is gone". Say so plainly.
+        if (cloudAllowed == false) {
+            Text(strings.setOrGateOffWarn, style = MaterialTheme.typography.bodySmall)
+        }
+
         GradientButton(
             onClick = {
                 scope.launch {
-                    pm.setOpenRouterApiKey(keyDraft.trim())
-                    val model = modelDraft.trim().ifBlank { AppConfig.DEFAULT_OPENROUTER_MODEL }
-                    pm.setOpenRouterModel(model)
+                    val newKey = (keyDraft ?: "").trim()
+                    val model = (modelDraft ?: "").trim()
+                        .ifBlank { AppConfig.DEFAULT_OPENROUTER_MODEL }
+                    // v7.7 bug 2 — NEVER overwrite a stored key with an empty
+                    // draft (that is how the key was destroyed: field looked
+                    // empty because of the load race, then Save wrote "").
+                    if (newKey.isEmpty() && pm.getOpenRouterApiKey().isBlank()) {
+                        savedStatus = strings.setOrKeyNeeded
+                        return@launch
+                    }
+                    if (newKey.isNotEmpty()) {
+                        pm.setOpenRouterSettings(newKey, model)
+                    } else {
+                        pm.setOpenRouterModel(model)
+                    }
                     modelDraft = model
                     savedStatus = strings.setOrKeySaved
                 }

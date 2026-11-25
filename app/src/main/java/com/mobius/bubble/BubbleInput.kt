@@ -78,9 +78,16 @@ fun BubblePanel(
     onToggleAutoScroll: () -> Unit = {},
 ) {
     val strings = LocalStrings.current
+    // v7.6 — the panel sheet is MORE TRANSPARENT than before so the app
+    // behind shows through, but the sheet keeps a firm 1 dp outline and
+    // the chat bubbles inside keep their own opaque fills + strokes
+    // (ChatHistoryView) — transparency never costs bubble contrast.
     Surface(
         shape = RoundedCornerShape(20.dp),
-        color = MaterialTheme.colorScheme.surface,
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.75f),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp, MaterialTheme.colorScheme.outline,
+        ),
         tonalElevation = 6.dp,
         modifier = Modifier.fillMaxWidth(),
     ) {

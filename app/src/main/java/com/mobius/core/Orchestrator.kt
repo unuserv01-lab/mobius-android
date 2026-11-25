@@ -17,6 +17,7 @@ import com.mobius.ai.CloudTimeoutException
 import com.mobius.ai.PromptBuilder
 import com.mobius.ui.AppLanguage
 import com.mobius.ui.LanguageManager
+import com.mobius.ui.stringsFor
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -301,10 +302,15 @@ class Orchestrator(
             featureFlags.isEnabled(FeatureFlag.PLANNING_LOOP).first() &&
             looksLikeScreenTask(text)
         ) {
+            // v7.7 bug 3 — build the tool once; when it is null, tell the
+            // agent WHY (toggle off vs toggle on but service not running)
+            // instead of the old blanket "access is off".
+            val tool = buildTool()
             val agent = PlanningAgent(
-                taskId, tools, buildTool(), screenLock,
+                taskId, tools, tool, screenLock,
                 onConfirmStep = hooks::confirmStep,
                 codeExecutor = buildCodeExecutor(taskId),
+                toolUnavailableMessage = if (tool == null) accessibilityUnavailableMessage() else null,
             )
             val result = runAgent(agent, ctx, intent)
             persistPlanningTrail(taskId, text, agent)
@@ -382,8 +388,7 @@ class Orchestrator(
         val tool = buildTool()
             ?: return SkillOutcome(
                 false, false,
-                "Accessibility access is off, so I can't operate other apps. Enable it in " +
-                    "Settings > Accessibility > ${AppConfig.APP_NAME}.",
+                accessibilityUnavailableMessage(),
                 emptyList(), emptyMap(),
             )
         // ITEM 2 (v5) — plan card: show the resolved steps BEFORE anything runs. Batal means
@@ -418,6 +423,24 @@ class Orchestrator(
             throw e
         } catch (e: Exception) {
             outcome
+        }
+    }
+
+    /**
+     * v7.7 bug 3 — why there is no tool, in the user's language. The old
+     * message always said "access is off", which was WRONG when the toggle
+     * was ON and only the service was not running — that mismatch is the
+     * most common case (after an APK update, or killed by MIUI).
+     */
+    private suspend fun accessibilityUnavailableMessage(): String {
+        val language = runCatching { LanguageManager(context).language.first() }
+            .getOrDefault(AppLanguage.ID)
+        val s = stringsFor(language)
+        return when (permissions.accessibilityState()) {
+            AccessibilityState.OFF -> s.a11yOffMsg.format(AppConfig.APP_NAME)
+            AccessibilityState.ENABLED_NOT_RUNNING -> s.a11yNotRunningMsg.format(AppConfig.APP_NAME)
+            // Unreachable when the tool really is null; fall back to the honest mismatch text.
+            AccessibilityState.LIVE -> s.a11yNotRunningMsg.format(AppConfig.APP_NAME)
         }
     }
 
